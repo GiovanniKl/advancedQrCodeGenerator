@@ -22,4 +22,4 @@ repos:
     hooks:
       - id: numpydoc-validation
         # TODO: legacy GUI code, remove once ROADMAP item A6 is done
-        exclude: ^aqrgen/gui\.py$
+        exclude: ^(aqrgen/gui\.py|tests/.*)$

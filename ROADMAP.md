@@ -23,7 +23,7 @@ PyQt5 is built on Qt 5, which is end-of-life.
 | Package | Requirement | Note |
 |---|---|---|
 | Python | `>=3.11` | develop on 3.14, test down to 3.11 (see D6) |
-| `qrcode[pil]` | `>=8.0,<9` | develop on 8.2; capped below 9 to avoid API breaks |
+| `qrcode[pil]` | `>=8.2,<9` | 8.0/8.1 silently ignore `embedded_image_path` (see C3); capped below 9 to avoid API breaks |
 | `pillow` | `>=10.0` | imported directly (`PIL.ImageTk` for E1) |
 
 The code was verified on qrcode 8.2 + Pillow 12.3 (all box styles ×
@@ -81,21 +81,26 @@ signatures. Both run through pre-commit.
 
 - [x] **B1** Crash on a fresh clone: `presets/` is now created when
   it's missing.
-- [ ] **B2** "warn & abort" always aborts, even when the file name
-  doesn't collide.
-- [ ] **B3** When the save dir is empty and you answer "use current
-  dir", the collision check is skipped and existing files are silently
-  overwritten.
-- [ ] **B4** Cancelling the color picker crashes (`hex2rgb(None)`).
-- [ ] **B5** `eval()` runs on user input (colors and preset values in
-  `gui.py`). Replace it with a proper RGB/hex parser.
+- [x] **B2** "warn & abort" now aborts only when the file name
+  actually collides.
+- [x] **B3** The collision check now also runs after "use current
+  dir?" is answered.
+- [x] **B4** Cancelling the color picker keeps the old color instead of
+  crashing.
+- [x] **B5** `eval()` is gone. Colors go through `core.parse_color`
+  (accepts `(r, g, b)` or `#rrggbb`, checks the 0–255 range), and preset
+  values are converted by variable type. Invalid colors show a warning
+  instead of a traceback. Only the colors the selected mode actually
+  uses are parsed.
 - [x] **B6** Deleting a preset now uses `Path.unlink()` instead of
   `os.system("del …")` (Windows-only, open to shell injection).
 - [ ] **B7** Presets and output paths depend on the current working
   directory. Resolve them relative to a user config dir instead (only
   `presets.PRESETS_DIR` needs to change).
 - [ ] **B8** No input validation (version 1–40, border ≥ 4, box size
-  > 0, RGB 0–255). Bad input gives a traceback in the console. Once
+  > 0). Bad input gives a traceback in the console. RGB values are
+  already validated (B5), and a `ValueError` from qrcode (e.g. version
+  41) already shows a warning. Once
   this and an error dialog are done, switch `[project.scripts]` to
   `[project.gui-scripts]` (no console window on Windows).
 - [ ] **B9** SVG + a non-square style shows a warning but still
@@ -105,8 +110,9 @@ signatures. Both run through pre-commit.
   to do: move to JSON, and keep a reader for the old `.txt` format.
 - [~] **B11** Done: the subtitle now shows the real app and qrcode
   versions instead of the hard-coded "Python 3.7.7 / qrcode 7.3.1".
-  Still to do: "Crtl" typo, copy-pasted docstrings ("color of the
-  background" ×3), `IntVar(value="10")`.
+  The copy-pasted color picker docstrings are fixed, and the unused
+  `clamp`/`rgb2hex`/`hex2rgb` helpers are removed. Still to do: "Crtl"
+  typo, `IntVar(value="10")`.
 
 ## C · Installation and tooling
 
@@ -114,9 +120,11 @@ signatures. Both run through pre-commit.
   the `aqrgen` command.
 - [x] **C2** Install guide in the README (pipx/uv for users;
   venv/uv for development).
-- [ ] **C3** Confirm the minimum versions (Python 3.11, qrcode 8.0,
-  Pillow 10.0) by installing the lowest allowed set
-  (`uv pip install --resolution lowest-direct`) and running the tests.
+- [x] **C3** Minimum versions checked with
+  `uv pip install --resolution lowest-direct` on Python 3.11. This
+  showed that qrcode 8.0 and 8.1 only know the misspelled
+  `embeded_image_path` and silently drop the logo, so the floor is now
+  **8.2**. Python 3.11 + qrcode 8.2 + Pillow 10.0.0 pass all tests.
 - [x] **C4** Updated `.gitignore`.
 - [x] **C5** Ruff + numpydoc validation configured in `pyproject.toml`,
   `.pre-commit-config.yaml` added.
@@ -125,10 +133,22 @@ signatures. Both run through pre-commit.
 
 ## D · Quality
 
-- [ ] **D5** pytest tests for `core.py` (each style × mask, SVG) and
-  preset round-trips. Add `pytest` to the dev group.
-- [ ] **D6** GitHub Actions: pre-commit + pytest on Python 3.11 and
-  3.14, plus the lowest-direct dependency run from C3.
+- [x] **D5** pytest suite in `tests/` (80 tests):
+  - `core`: each style × mask, colors, embedded image, SVG, color
+    parsing.
+  - `presets`: round-trip, legacy file format.
+  - GUI behaviour with stubbed dialogs: regression tests for B1–B5 and
+    presets. These are skipped when Tk can't start (headless Linux).
+- [x] **D6** GitHub Actions (`.github/workflows/ci.yml`):
+  - pre-commit
+  - pytest on Python 3.11–3.14 on Ubuntu, and 3.14 on Windows
+  - a lowest-direct job on Windows with Python 3.11
+
+  It runs on pushes to `main` and on pull requests (not for docs-only
+  changes), or by hand from the Actions tab. Every job has a timeout.
+
+  The workflow passes `actionlint`. It hasn't run on GitHub yet, so
+  check the first run after pushing.
 
 ## E · Features
 
@@ -141,7 +161,9 @@ signatures. Both run through pre-commit.
   embedding an image.
 - [ ] **E5** Expose the new qrcode 8 features: logo size ratio, styled
   and colored SVG output.
-- [ ] **E6** Hex color input next to RGB triplets.
+- [~] **E6** Hex colors: the color fields already accept `#rrggbb`
+  (B5). Still to do: mention it in the labels, or add a separate hex
+  field.
 - [ ] **E7** Presets as a dropdown or list box instead of a read-only
   text widget.
 - [ ] **E8** Optional command-line mode (`aqrgen --preset foo "text"`)

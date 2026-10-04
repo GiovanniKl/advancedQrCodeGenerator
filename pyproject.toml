@@ -12,7 +12,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Jan Klíma" }]
 requires-python = ">=3.11"
 dependencies = [
-    "qrcode[pil]>=8.0,<9",
+    "qrcode[pil]>=8.2,<9",
     "pillow>=10.0",
 ]
 classifiers = [
@@ -35,6 +35,7 @@ dev = [
     "ruff>=0.16",
     "numpydoc>=1.11",
     "pre-commit>=4.6",
+    "pytest>=9.0",
 ]
 
 [tool.setuptools]
@@ -57,16 +58,25 @@ select = [
     "SIM",  # flake8-simplify
     "PL",   # pylint rules implemented in Ruff
 ]
+ignore = [
+    "PLR2004",  # magic values: too noisy for RGB/QR constants
+]
 
 [tool.ruff.lint.per-file-ignores]
 # TODO: legacy GUI code, remove once ROADMAP items A2, A5 and A6 are done
 "aqrgen/gui.py" = ["N801", "N802", "D101", "D205", "D401", "W505", "PLR0915"]
+"tests/*" = ["D1"]  # test functions and fixtures need no docstrings
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
 
 [tool.ruff.lint.pycodestyle]
 max-doc-length = 72
+
+# --- pytest -----------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra"]
 
 # --- numpydoc docstring validation -----------------------------------
 [tool.numpydoc_validation]

@@ -132,6 +132,68 @@ def make_qr_image(settings):
     )
 
 
+def parse_color(text):
+    """Parse an RGB color from text.
+
+    Parameters
+    ----------
+    text : str
+        Either an RGB triplet such as ``"(255, 128, 0)"`` (parentheses
+        optional) or a hex code such as ``"#ff8000"``.
+
+    Returns
+    -------
+    tuple of int
+        The color as an ``(r, g, b)`` tuple.
+
+    Raises
+    ------
+    ValueError
+        If the text is not a valid color or a component is outside
+        the range 0 to 255.
+    """
+    stripped = text.strip()
+    if stripped.startswith("#"):
+        digits = stripped[1:]
+        if len(digits) != 6:
+            raise ValueError(f"{text!r} is not a #rrggbb hex color.")
+        try:
+            return tuple(int(digits[i : i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            raise ValueError(f"{text!r} is not a #rrggbb hex color.") from None
+    parts = stripped.removeprefix("(").removesuffix(")").split(",")
+    try:
+        color = tuple(int(part) for part in parts)
+    except ValueError:
+        color = ()
+    if len(color) != 3 or not all(0 <= c <= 255 for c in color):
+        raise ValueError(
+            f"{text!r} is not an RGB triplet of three integers from 0 to "
+            "255, e.g. (255, 128, 0)."
+        )
+    return color
+
+
+def output_path(directory, name, extension):
+    """Return the file path a QR code image is saved to.
+
+    Parameters
+    ----------
+    directory : str or pathlib.Path
+        Target directory.
+    name : str
+        File name without extension.
+    extension : {".png", ".svg"}
+        File extension.
+
+    Returns
+    -------
+    pathlib.Path
+        Path of the image file.
+    """
+    return Path(directory) / f"{name}{extension}"
+
+
 def save_qr_image(image, directory, name, extension):
     """Save a generated QR code image.
 
@@ -151,7 +213,7 @@ def save_qr_image(image, directory, name, extension):
     pathlib.Path
         Path of the saved file.
     """
-    path = Path(directory) / f"{name}{extension}"
+    path = output_path(directory, name, extension)
     image.save(path)
     return path
 

@@ -1,0 +1,78 @@
+name: CI
+
+# Runs on pushes to main and on pull requests, but not for changes that
+# only touch docs. Run it on any branch by hand with "Run workflow" on
+# the Actions tab (workflow_dispatch).
+on:
+  push:
+    branches: [main]
+    paths-ignore: &docs-only
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
+  pull_request:
+    paths-ignore: *docs-only
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# a newer push to the same branch cancels the run still in progress
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint (pre-commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python -m pip install pre-commit
+      - run: pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    name: test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    # stops a hung (e.g. GUI) test long before the 6 h default
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # all versions on Linux (GUI tests skip there: no display);
+        # newest on Windows, where the GUI tests run. The oldest
+        # Python on Windows is covered by the minimum-versions job.
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python-version: "3.14"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      # --group needs pip >= 25.1
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e . --group dev
+      - run: python -m pytest
+
+  minimum-versions:
+    name: test (lowest allowed qrcode and Pillow, Python 3.11)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: python -m pip install uv
+      # lowest-direct: our direct dependencies at their minimum versions
+      - run: uv pip install --system --resolution lowest-direct -e .
+      - run: python -m pip install pytest
+      - run: python -m pip list
+      - run: python -m pytest

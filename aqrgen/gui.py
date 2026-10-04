@@ -436,12 +436,21 @@ class qrCodeGen:
 
     def qrmaker(self, *args):
         """Make the QR code according to specifications. Returns the
-        generated image of the QR code.
+        generated image of the QR code. Raises ValueError with a
+        user-readable message if a color entry is invalid.
         """
         if self.ext.get() == ".svg" and self.boxstyle.get() != "square":
             messagebox.showwarning(
                 "Warning - " + self.mbt, "Change style or extension!"
             )
+        # parse only the colors used by the selected format and mask
+        colors = {}
+        if self.ext.get() == ".png":
+            colors["back_color"] = self.readcolor(self.bgcolor, "Background")
+            if self.cmask.get() != "image":
+                colors["front_color"] = self.readcolor(self.fcolor, "Face")
+            if self.cmask.get() not in ("solid", "image"):
+                colors["edge_color"] = self.readcolor(self.color2, "2nd")
         settings = core.QrSettings(
             data=self.mess.get(),
             version=self.size.get(),
@@ -451,15 +460,22 @@ class qrCodeGen:
             border=self.bdsize.get(),
             box_style=self.boxstyle.get(),
             color_mask=self.cmask.get(),
-            back_color=eval(self.bgcolor.get()),
-            front_color=eval(self.fcolor.get()),
-            edge_color=eval(self.color2.get()),
             mask_image_path=self.cmipath.get(),
             embedded_image_path=(
                 self.embimp.get() if self.embim.get() else None
             ),
+            **colors,
         )
         return core.make_qr_image(settings)
+
+    def readcolor(self, var, label):
+        """Parse the color in the given StringVar. Raises ValueError
+        with the color label prepended if the color is invalid.
+        """
+        try:
+            return core.parse_color(var.get())
+        except ValueError as err:
+            raise ValueError(f"{label} color: {err}") from None
 
     def make(self, *args):
         """Function used to save generated image using the qrmaker()
@@ -472,18 +488,18 @@ class qrCodeGen:
                 + "directory. Do you want to use "
                 + "current directory?",
             )
-            if chngs:
-                self.savedir.set(os.getcwd())
-                conti = True
-            else:
+            if not chngs:
                 messagebox.showwarning(
                     "Warning - " + self.mbt,
-                    "No saving path entered! Image not " + "saved.",
+                    "No saving path entered! Image not saved.",
                 )
-                conti = False
-        elif self.collide.get() == "ask":
-            listofims = os.listdir(self.savedir.get())
-            if self.picname.get() + self.ext.get() in listofims:
+                return
+            self.savedir.set(os.getcwd())
+        target = core.output_path(
+            self.savedir.get(), self.picname.get(), self.ext.get()
+        )
+        if target.exists():
+            if self.collide.get() == "ask":
                 conti = messagebox.askyesno(
                     "Overwrite - " + self.mbt,
                     "Image with this "
@@ -491,26 +507,27 @@ class qrCodeGen:
                     + "specified location. Do you want"
                     + " to overwrite it?",
                 )
-            else:
-                conti = True
-        elif self.collide.get() == "overwrite":
-            conti = True
-        elif self.collide.get() == "warn & abort":
-            conti = False
-            messagebox.showwarning(
-                "Warning - " + self.mbt,
-                "Image with this name already exists within"
-                + " the specified location! QR code genera"
-                + "tion aborted.",
-            )
-        if conti:
+                if not conti:
+                    return
+            elif self.collide.get() == "warn & abort":
+                messagebox.showwarning(
+                    "Warning - " + self.mbt,
+                    "Image with this name already exists within"
+                    + " the specified location! QR code genera"
+                    + "tion aborted.",
+                )
+                return
+        try:
             img = self.qrmaker()
-            core.save_qr_image(
-                img, self.savedir.get(), self.picname.get(), self.ext.get()
-            )
-            messagebox.showinfo(
-                "Info - " + self.mbt, "QR code created successfully!"
-            )
+        except ValueError as err:
+            messagebox.showwarning("Warning - " + self.mbt, str(err))
+            return
+        core.save_qr_image(
+            img, self.savedir.get(), self.picname.get(), self.ext.get()
+        )
+        messagebox.showinfo(
+            "Info - " + self.mbt, "QR code created successfully!"
+        )
 
     def optMngr0(self, *args):
         """Manages disabled state of widgets not supported in SVG image
@@ -570,11 +587,13 @@ class qrCodeGen:
             if name not in dat:
                 continue
             try:
-                if isinstance(var.get(), str):
-                    var.set(dat[name])
+                if isinstance(var, BooleanVar):
+                    var.set({"True": True, "False": False}[dat[name]])
+                elif isinstance(var, IntVar):
+                    var.set(int(dat[name]))
                 else:
-                    var.set(eval(dat[name]))
-            except (ValueError, SyntaxError):
+                    var.set(dat[name])
+            except (KeyError, ValueError):
                 messagebox.showwarning(
                     "Warning - " + self.mbt,
                     "Loading was "
@@ -651,35 +670,30 @@ class qrCodeGen:
             self.presli_text.insert("end", name + "\n")
         self.presli_text["state"] = "disabled"
 
-    def clamp(self, x, *args):
-        """Used for validation of rgb tuple elements to be between 0 and 255."""
-        return max(0, min(x, 255))
-
-    def rgb2hex(self, rgbtup, *args):
-        """Converts rgb tuple to a hex string."""
-        return "#{:02x}{:02x}{:02x}".format(*[self.clamp(i) for i in rgbtup])
-
-    def hex2rgb(self, hexstr, *args):
-        """Converts hex string to RGB tuple."""
-        hexstr = hexstr.lstrip("#")
-        return tuple(int(hexstr[i : i + 2], 16) for i in (0, 2, 4))
+    def pickcolor(self, var):
+        """Let the user choose a color with a dialog and store it in
+        the given StringVar as an RGB triplet. Nothing changes if the
+        dialog is cancelled.
+        """
+        try:
+            initial = core.parse_color(var.get())
+        except ValueError:
+            initial = None
+        rgb, _ = colorchooser.askcolor(initialcolor=initial)
+        if rgb is not None:
+            var.set(str(tuple(int(c) for c in rgb)))
 
     def gimmecolorbg(self, *args):
         """Lets you choose a color of the QR Code background."""
-        _, hexcode = colorchooser.askcolor(
-            initialcolor=eval(self.bgcolor.get())
-        )
-        self.bgcolor.set(str(self.hex2rgb(hexcode)))
+        self.pickcolor(self.bgcolor)
 
     def gimmecolorf(self, *args):
-        """Lets you choose a color of the QR Code background."""
-        _, hexcode = colorchooser.askcolor(initialcolor=eval(self.fcolor.get()))
-        self.fcolor.set(str(self.hex2rgb(hexcode)))
+        """Lets you choose a color of the QR Code face."""
+        self.pickcolor(self.fcolor)
 
     def gimmecolor2(self, *args):
-        """Lets you choose a color of the QR Code background."""
-        _, hexcode = colorchooser.askcolor(initialcolor=eval(self.color2.get()))
-        self.color2.set(str(self.hex2rgb(hexcode)))
+        """Lets you choose the 2nd color of the QR Code gradient."""
+        self.pickcolor(self.color2)
 
 
 def main():

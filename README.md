@@ -9,7 +9,7 @@ Check some QR codes in the `examples` section of the [`qrcode`][qrcode] module t
 ## Requirements
 - Python **3.11 or newer** with `tkinter` (included in the official
   Windows and macOS installers; on Linux install e.g. `python3-tk`)
-- [`qrcode`][qrcode] **8.x** (`>=8.0,<9`)
+- [`qrcode`][qrcode] **8.2 or newer within 8.x** (`>=8.2,<9`)
 - [`pillow`](https://pypi.org/project/pillow/) **10.0 or newer**
 
 The Python packages are installed automatically by the steps below.
@@ -90,8 +90,14 @@ directory you start the app from.
 - Code style: [Ruff](https://docs.astral.sh/ruff/) formatter and linter,
   80 characters per line, numpydoc docstrings with at most 72 characters
   per line. Configuration is in `pyproject.toml`.
+- Tests: `pytest` (GUI tests are skipped automatically when Tk can't
+  open a window).
 - `pre-commit install` runs Ruff and numpydoc validation on every commit;
   `pre-commit run --all-files` runs them manually.
+- GitHub Actions runs pre-commit and the tests on pushes to `main` and
+  on pull requests: Python 3.11–3.14 on Ubuntu, 3.14 on Windows, and
+  3.11 with the lowest allowed dependency versions. Start it manually
+  for other branches from the Actions tab ("Run workflow").
 - Package layout: `aqrgen/core.py` (QR generation, no GUI),
   `aqrgen/presets.py` (preset files), `aqrgen/gui.py` (tkinter GUI).
 - Planned changes are tracked in [ROADMAP.md](ROADMAP.md).
