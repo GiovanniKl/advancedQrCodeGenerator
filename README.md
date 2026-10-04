@@ -182,10 +182,13 @@ box at the top and click **Save**; pick one from the dropdown and click
 | Linux | `~/.config/aqrgen/presets` (or `$XDG_CONFIG_HOME/aqrgen/presets`) |
 
 Each preset is one JSON file, so you can share a preset by sending the
-file and dropping it into a friend's presets folder. Presets from
-versions before 0.1.0 (`.txt` files in a `presets` folder next to where
-the app was started) are imported automatically on first start; the
-old files are left untouched.
+file and dropping it into a friend's presets folder.
+
+Presets from versions before 0.1.0 (`.txt` files in a `presets` folder)
+are imported automatically when you start the app from the old app's
+folder. Otherwise click **Import…** and pick the old app's folder or its
+`presets` folder. If a preset of the same name exists, the old one gets
+a number (`wifi 2`). The old files are left untouched.
 
 <details>
 <summary>Preset file format</summary>

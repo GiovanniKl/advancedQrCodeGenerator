@@ -43,7 +43,11 @@ script with a new window layout, many new options and a test suite.
 - Generating and copying run in the background; the window no longer
   freezes.
 - Presets are JSON files in a per-user folder (e.g.
-  `%APPDATA%\aqrgen\presets`); old `.txt` presets are imported once.
+  `%APPDATA%\aqrgen\presets`). Old `.txt` presets are imported once,
+  also when they were saved in the Windows encoding (e.g. cp1250);
+  when a name is taken, the old preset gets a number (`name 2`). The
+  "Import…" button imports old presets from any folder. The import
+  message lists every renamed or unreadable file.
 - Embedding a logo selects error correction H automatically, as qrcode
   requires it.
 - SVG mode replaces options it can't do and restores them when

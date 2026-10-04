@@ -14,7 +14,9 @@ a ``presets`` folder in the working directory; `import_legacy_presets`
 converts those.
 """
 
+import dataclasses
 import json
+import locale
 import os
 import sys
 from pathlib import Path
@@ -49,7 +51,29 @@ LEGACY_KEYS = {
 }
 """Keys of old ``.txt`` presets mapped to current setting names."""
 
-_IMPORT_MARKER = ".imported-legacy-dirs"
+IMPORT_LOG = ".imported-legacy-presets"
+"""File in `PRESETS_DIR` listing the old preset files imported."""
+
+_OLD_IMPORT_MARKER = ".imported-legacy-dirs"  # used by early versions
+
+
+@dataclasses.dataclass
+class LegacyImport:
+    """Result of `import_legacy_presets`.
+
+    Attributes
+    ----------
+    imported : list of tuple of str
+        ``(old file name, new preset name)`` of every imported preset.
+        The names differ when a preset with the old name already
+        existed.
+    failed : list of tuple of str
+        ``(old file name, reason)`` of files that couldn't be read;
+        they are tried again on the next start.
+    """
+
+    imported: list = dataclasses.field(default_factory=list)
+    failed: list = dataclasses.field(default_factory=list)
 
 
 def default_presets_dir():
@@ -235,54 +259,178 @@ def read_legacy_preset(path):
         as text. Unknown keys are dropped.
     """
     settings = {}
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    for line in _read_legacy_text(path).splitlines():
         key, sep, value = line.partition("=")
         if sep and key in LEGACY_KEYS:
             settings[LEGACY_KEYS[key]] = _convert_legacy_value(key, value)
     return settings
 
 
-def import_legacy_presets(legacy_dir=None):
-    """Convert old ``.txt`` presets to JSON presets, once per folder.
+def find_legacy_folder(folder):
+    """Find old ``.txt`` presets in a folder or its ``presets`` folder.
 
-    A preset is skipped if a JSON preset with the same name already
-    exists. The old files are left untouched. Each legacy folder is
-    imported only once; later runs skip it.
+    Parameters
+    ----------
+    folder : str or pathlib.Path
+        The old presets folder, or the folder of the old app that
+        contains it.
+
+    Returns
+    -------
+    pathlib.Path or None
+        The folder with the ``.txt`` files, or None if there are none.
+    """
+    for candidate in (Path(folder), Path(folder) / "presets"):
+        if any(path.is_file() for path in candidate.glob("*.txt")):
+            return candidate
+    return None
+
+
+def legacy_presets(legacy_dir):
+    """Split the old presets of a folder into new and imported ones.
+
+    Parameters
+    ----------
+    legacy_dir : str or pathlib.Path
+        Folder with old ``.txt`` presets.
+
+    Returns
+    -------
+    new : list of pathlib.Path
+        Files not imported yet.
+    imported : list of pathlib.Path
+        Files imported before, according to `IMPORT_LOG`.
+    """
+    done = _imported_files()
+    files = sorted(Path(legacy_dir).glob("*.txt"))
+    return (
+        [path for path in files if str(path.resolve()) not in done],
+        [path for path in files if str(path.resolve()) in done],
+    )
+
+
+def import_legacy_presets(legacy_dir=None, again=False):
+    """Convert old ``.txt`` presets to JSON presets.
+
+    Each old file is imported once; `IMPORT_LOG` remembers which. If a
+    preset with the same name already exists, the old one is imported
+    as e.g. ``name 2``. The old files are left untouched. Files that
+    can't be read are reported and tried again next time.
 
     Parameters
     ----------
     legacy_dir : str or pathlib.Path, optional
         Folder with old presets, `LEGACY_DIR` by default.
+    again : bool, default False
+        Also import files that were imported before.
 
     Returns
     -------
-    list of str
-        Names of the imported presets.
+    LegacyImport
+        What was imported and what failed.
     """
+    result = LegacyImport()
     legacy_dir = Path(LEGACY_DIR if legacy_dir is None else legacy_dir)
     if not legacy_dir.is_dir():
-        return []
-    marker = ensure_presets_dir() / _IMPORT_MARKER
-    done = (
-        marker.read_text(encoding="utf-8").splitlines()
-        if marker.exists()
-        else []
-    )
-    key = str(legacy_dir.resolve())
-    if key in done:
-        return []
-    imported = []
+        return result
+    folder = ensure_presets_dir()
+    (folder / _OLD_IMPORT_MARKER).unlink(missing_ok=True)
+    log = folder / IMPORT_LOG
+    done = set() if again else _imported_files()
+    handled = []
     for path in sorted(legacy_dir.glob("*.txt")):
+        key = str(path.resolve())
+        if key in done:
+            continue
         try:
-            if preset_path(path.stem).exists():
-                continue
-            write_preset(path.stem, read_legacy_preset(path))
-        except (OSError, UnicodeDecodeError, ValueError):
-            continue  # unreadable file or unusable name: skip it
-        imported.append(path.stem)
-    with marker.open("a", encoding="utf-8") as file:
-        file.write(key + "\n")
-    return imported
+            settings = read_legacy_preset(path)
+        except OSError as err:
+            result.failed.append((path.name, err.strerror or str(err)))
+            continue
+        name = _free_name(_usable_name(path.stem))
+        write_preset(name, settings)
+        result.imported.append((path.name, name))
+        handled.append(key)
+    if handled:
+        with log.open("a", encoding="utf-8") as file:
+            file.writelines(key + "\n" for key in handled)
+    return result
+
+
+def _imported_files():
+    """Read the list of old preset files imported so far.
+
+    Returns
+    -------
+    set of str
+        Resolved paths from `IMPORT_LOG`.
+    """
+    log = PRESETS_DIR / IMPORT_LOG
+    if not log.exists():
+        return set()
+    return set(log.read_text(encoding="utf-8").splitlines())
+
+
+def _read_legacy_text(path):
+    """Read an old preset file, whatever its encoding.
+
+    Early versions saved presets in the system's default encoding,
+    e.g. cp1250 on Czech Windows, not in UTF-8.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Path of the ``.txt`` file.
+
+    Returns
+    -------
+    str
+        The file content.
+    """
+    raw = Path(path).read_bytes()
+    for encoding in ("utf-8-sig", locale.getencoding()):
+        try:
+            return raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            pass
+    return raw.decode("latin-1")  # never fails
+
+
+def _usable_name(name):
+    """Turn a file name into a valid preset name.
+
+    Parameters
+    ----------
+    name : str
+        Name of an old preset file without extension.
+
+    Returns
+    -------
+    str
+        The name with forbidden characters replaced by ``_`` and
+        leading dots removed.
+    """
+    name = "".join("_" if c in FORBIDDEN_NAME_CHARS else c for c in name)
+    return name.lstrip(".") or "imported"
+
+
+def _free_name(name):
+    """Return a preset name that isn't taken yet.
+
+    Parameters
+    ----------
+    name : str
+        Wanted name.
+
+    Returns
+    -------
+    str
+        The name itself, or ``name 2``, ``name 3``, … if it is taken.
+    """
+    candidate, number = name, 2
+    while preset_path(candidate).exists():
+        candidate, number = f"{name} {number}", number + 1
+    return candidate
 
 
 def _convert_legacy_value(key, value):

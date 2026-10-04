@@ -208,8 +208,11 @@ signatures. Both run through pre-commit.
     meantime.
 - [x] **E6** Color fields accept `(r, g, b)` and `#rrggbb`, and the
   labels say so.
-- [x] **E7** Editable preset dropdown with Load / Save / Delete / Open
-  folder buttons instead of the entry and the read-only text list.
+- [x] **E7** Editable preset dropdown with Load / Save / Delete /
+  Import… / Open folder buttons instead of the entry and the read-only
+  text list. Import… brings in old `.txt` presets from any folder
+  (asking before importing files a second time); clashing names get a
+  number (`name 2`).
 - [-] **E8** ~~Optional command-line mode (`aqrgen --preset foo
   "text"`).~~ Dropped: too complicated for most users; the GUI is the
   intended interface.

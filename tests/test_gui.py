@@ -531,7 +531,7 @@ def test_imports_legacy_presets_on_start(tk_root, tmp_path, dialogs):
     try:
         wait_idle(app)
         assert dialogs.kinds() == ["showinfo"]
-        assert "old" in dialogs.last_message()
+        assert "• old" in dialogs.last_message()
         assert app.preset_combo["values"] == ("old",)
         app.preset_name.set("old")
         app.load_preset()
@@ -539,6 +539,84 @@ def test_imports_legacy_presets_on_start(tk_root, tmp_path, dialogs):
     finally:
         wait_idle(app)
         app.close()
+
+
+def test_legacy_import_reports_renames_and_failures(tk_root, tmp_path, dialogs):
+    presets.write_preset("old", {"message": "newer"})
+    legacy = tmp_path / "presets"
+    legacy.mkdir()
+    (legacy / "old.txt").write_text("mess=hi\n", encoding="utf-8")
+    (legacy / "broken.txt").mkdir()
+    app = make_app(tk_root, tmp_path)
+    try:
+        wait_idle(app)
+        assert dialogs.kinds() == ["showwarning"]
+        message = dialogs.last_message()
+        assert "old 2 (from old.txt, as 'old' exists)" in message
+        assert "broken.txt" in message
+    finally:
+        wait_idle(app)
+        app.close()
+
+
+@pytest.fixture
+def old_app_folder(tmp_path):
+    folder = tmp_path / "old app"
+    (folder / "presets").mkdir(parents=True)
+    for name in ("a", "b"):
+        (folder / "presets" / f"{name}.txt").write_text(
+            f"mess={name}\n", encoding="utf-8"
+        )
+    return folder
+
+
+def pick_folder(monkeypatch, folder):
+    monkeypatch.setattr(
+        filedialog, "askdirectory", lambda **kw: str(folder) if folder else ""
+    )
+
+
+def test_import_button_imports_from_old_app_folder(
+    app, dialogs, monkeypatch, old_app_folder
+):
+    pick_folder(monkeypatch, old_app_folder)
+    app.import_old_presets()
+    assert app.preset_combo["values"] == ("a", "b")
+    assert dialogs.kinds() == ["showinfo"]
+    assert "Imported 2 preset(s)" in dialogs.last_message()
+
+
+def test_import_button_cancel(app, dialogs, monkeypatch):
+    pick_folder(monkeypatch, None)
+    app.import_old_presets()
+    assert dialogs.log == []
+
+
+def test_import_button_without_presets_warns(
+    app, dialogs, monkeypatch, tmp_path
+):
+    pick_folder(monkeypatch, tmp_path / "presets")
+    (tmp_path / "presets").mkdir(exist_ok=True)
+    app.import_old_presets()
+    assert dialogs.kinds() == ["showwarning"]
+    assert "No old presets" in dialogs.last_message()
+
+
+@pytest.mark.parametrize("answer", [False, True])
+def test_import_button_asks_before_importing_again(
+    app, dialogs, monkeypatch, old_app_folder, answer
+):
+    pick_folder(monkeypatch, old_app_folder)
+    app.import_old_presets()
+    dialogs.log.clear()
+    dialogs.answer = answer
+    app.import_old_presets()
+    assert dialogs.kinds()[0] == "askyesno"
+    assert (
+        "All presets in this folder were imported before" in (dialogs.log[0][1])
+    )
+    expected = ("a", "a 2", "b", "b 2") if answer else ("a", "b")
+    assert app.preset_combo["values"] == expected
 
 
 # --- background opacity ----------------------------------------------

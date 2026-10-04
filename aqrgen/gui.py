@@ -318,11 +318,17 @@ class QrCodeGeneratorApp:
             (2, "Load", self.load_preset),
             (3, "Save", self.save_preset),
             (4, "Delete", self.delete_preset),
-            (5, "Open folder", self.open_presets_folder),
+            (5, "Import…", self.import_old_presets),
+            (6, "Open folder", self.open_presets_folder),
         ):
-            ttk.Button(bar, text=text, command=command).grid(
-                column=column, row=0, padx=(0, PAD)
-            )
+            button = ttk.Button(bar, text=text, command=command)
+            button.grid(column=column, row=0, padx=(0, PAD))
+            if text == "Import…":
+                button.tooltip = Tooltip(
+                    button,
+                    "Import presets from an older version of the app "
+                    "(.txt files in its 'presets' folder).",
+                )
         self._reload_preset_list()
 
     def _build_content(self, column):
@@ -1306,21 +1312,81 @@ class QrCodeGeneratorApp:
         self.preset_combo["values"] = presets.list_presets()
 
     def _import_legacy_presets(self):
-        """Import old ``.txt`` presets and tell the user about it."""
+        """Import old presets found in the start folder."""
         try:
-            imported = presets.import_legacy_presets()
+            result = presets.import_legacy_presets()
         except OSError as err:
             self._warn(f"Old presets could not be imported: {err}")
             return
-        if imported:
-            self._reload_preset_list()
-            messagebox.showinfo(
-                f"Presets imported - {TITLE}",
-                f"Imported {len(imported)} preset(s) from the old "
-                f"'presets' folder:\n{', '.join(imported)}\n\nThey are "
-                f"now stored in:\n{presets.PRESETS_DIR}\n\nThe old files "
-                "were left untouched.",
+        if result.imported or result.failed:
+            self._report_import(result, "the old 'presets' folder")
+
+    def import_old_presets(self):
+        """Ask for a folder of an older version, import its presets."""
+        chosen = filedialog.askdirectory(
+            title="Folder of the old app or its 'presets' folder",
+            initialdir=os.getcwd(),
+            mustexist=True,
+        )
+        if not chosen:
+            return
+        folder = presets.find_legacy_folder(chosen)
+        if folder is None:
+            self._warn(
+                "No old presets (.txt files) found in this folder or in "
+                "its 'presets' folder."
             )
+            return
+        new, imported = presets.legacy_presets(folder)
+        again = False
+        if imported:
+            question = (
+                f"{len(imported)} of the {len(new) + len(imported)} "
+                "presets in this folder were imported before. Import "
+                "those again too (with numbered names)?"
+                if new
+                else "All presets in this folder were imported before. "
+                "Import them again (with numbered names)?"
+            )
+            again = messagebox.askyesno(f"Import presets - {TITLE}", question)
+            if not new and not again:
+                return
+        try:
+            result = presets.import_legacy_presets(folder, again=again)
+        except OSError as err:
+            self._warn(f"Old presets could not be imported: {err}")
+            return
+        self._report_import(result, str(folder))
+
+    def _report_import(self, result, source):
+        """Tell the user what an import of old presets did.
+
+        Parameters
+        ----------
+        result : aqrgen.presets.LegacyImport
+            Result of the import.
+        source : str
+            Where the presets came from, for the message.
+        """
+        self._reload_preset_list()
+        lines = []
+        if result.imported:
+            lines.append(
+                f"Imported {len(result.imported)} preset(s) from {source}:"
+            )
+            for old, new in result.imported:
+                stem = old.removesuffix(".txt")
+                renamed = f" (from {old}, as '{stem}' exists)"
+                lines.append(f"  • {new}" + (renamed if new != stem else ""))
+            lines.append(f"\nThey are now stored in:\n{presets.PRESETS_DIR}")
+        if result.failed:
+            lines.append("\nThese old presets could not be read:")
+            lines.extend(
+                f"  • {old}: {reason}" for old, reason in result.failed
+            )
+        lines.append("\nThe old files were left untouched.")
+        show = messagebox.showwarning if result.failed else messagebox.showinfo
+        show(f"Presets imported - {TITLE}", "\n".join(lines))
 
     # --- shutdown ----------------------------------------------------
 
