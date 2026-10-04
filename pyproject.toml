@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aqrgen"
+version = "0.1.0"
+description = "Python GUI for advanced QR code generation using the qrcode package."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jan Klíma" }]
+requires-python = ">=3.11"
+dependencies = [
+    "qrcode[pil]>=8.0,<9",
+    "pillow>=10.0",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Environment :: X11 Applications",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: MacOS X",
+    "Topic :: Multimedia :: Graphics",
+]
+
+[project.urls]
+Repository = "https://github.com/GiovanniKl/advancedQrCodeGenerator"
+
+[project.scripts]
+aqrgen = "aqrgen.gui:main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16",
+    "numpydoc>=1.11",
+    "pre-commit>=4.6",
+]
+
+[tool.setuptools]
+packages = ["aqrgen"]
+
+# --- Ruff: formatter + linter ----------------------------------------
+[tool.ruff]
+line-length = 80
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings (incl. W505 doc line length)
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "D",    # pydocstyle
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "PL",   # pylint rules implemented in Ruff
+]
+
+[tool.ruff.lint.per-file-ignores]
+# TODO: legacy GUI code, remove once ROADMAP items A2, A5 and A6 are done
+"aqrgen/gui.py" = ["N801", "N802", "D101", "D205", "D401", "W505", "PLR0915"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 72
+
+# --- numpydoc docstring validation -----------------------------------
+[tool.numpydoc_validation]
+checks = [
+    "all",   # report everything except the checks listed below
+    "ES01",  # no extended summary required
+    "EX01",  # no Examples section required
+    "SA01",  # no See Also section required
+]
