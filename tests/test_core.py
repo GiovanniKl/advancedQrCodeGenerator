@@ -1,5 +1,6 @@
 """Tests of the GUI-independent QR code generation."""
 
+import time
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -127,9 +128,68 @@ def test_svg(tmp_path):
     assert ET.parse(path).getroot().tag.endswith("svg")
 
 
-def test_unknown_option_raises():
-    with pytest.raises(KeyError):
-        core.make_qr_image(settings(box_style="triangle"))
+# --- check_settings --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"version": 0}, "Size standard"),
+        ({"version": 41}, "Size standard"),
+        ({"box_size": 0}, "Box size"),
+        ({"border": 3}, "Border size"),
+        ({"error_correction": "X"}, "Unknown error correction"),
+        ({"extension": ".jpg"}, "Unknown image extension"),
+        ({"box_style": "triangle"}, "Unknown box style"),
+        ({"color_mask": "plaid"}, "Unknown color mask"),
+        ({"embedded_image_path": "missing.png"}, "Embedded image"),
+        ({"color_mask": "image"}, "Image mask"),
+        ({"color_mask": "image", "mask_image_path": "x.png"}, "Image mask"),
+    ],
+)
+def test_invalid_settings(changes, message):
+    with pytest.raises(ValueError, match=message):
+        core.make_qr_image(settings(**changes))
+
+
+def test_embedded_image_requires_h(logo):
+    with pytest.raises(ValueError, match="error correction H"):
+        core.check_settings(
+            settings(embedded_image_path=logo, error_correction="M")
+        )
+
+
+def test_svg_ignores_png_only_options():
+    core.check_settings(
+        settings(extension=".svg", color_mask="image", error_correction="L")
+    )
+
+
+# --- make_preview ----------------------------------------------------
+
+
+@pytest.mark.parametrize("version", [1, 10, 40])
+def test_preview_fits_size(version):
+    image = core.make_preview(settings(version=version), 300)
+    assert max(image.size) == 300
+
+
+def test_preview_of_large_code_is_fast():
+    start = time.perf_counter()
+    core.make_preview(
+        settings(version=40, box_size=50, box_style="circle"), 300
+    )
+    assert time.perf_counter() - start < 5
+
+
+def test_preview_of_svg_is_black_and_white():
+    image = core.make_preview(settings(extension=".svg"), 300)
+    assert image.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_preview_validates():
+    with pytest.raises(ValueError, match="Border size"):
+        core.make_preview(settings(border=0), 300)
 
 
 def test_output_path(tmp_path):

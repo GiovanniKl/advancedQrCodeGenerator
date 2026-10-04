@@ -27,7 +27,7 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/GiovanniKl/advancedQrCodeGenerator"
 
-[project.scripts]
+[project.gui-scripts]
 aqrgen = "aqrgen.gui:main"
 
 [dependency-groups]
@@ -63,9 +63,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# TODO: legacy GUI code, remove once ROADMAP items A2, A5 and A6 are done
-"aqrgen/gui.py" = ["N801", "N802", "D101", "D205", "D401", "W505", "PLR0915"]
-"tests/*" = ["D1"]  # test functions and fixtures need no docstrings
+# tests: no docstrings needed; pytest fixtures count as arguments
+"tests/*" = ["D1", "PLR0913", "PLR0917"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
@@ -86,3 +85,5 @@ checks = [
     "EX01",  # no Examples section required
     "SA01",  # no See Also section required
 ]
+# numpy convention: constructor parameters go in the class docstring
+exclude = ['\.__init__$']

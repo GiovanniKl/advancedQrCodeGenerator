@@ -1,679 +1,782 @@
 """Tkinter GUI of the Advanced QR Code Generator."""
 
 import os
-from importlib.metadata import version
-from tkinter import (
-    BooleanVar,
-    E,
-    IntVar,
-    StringVar,
-    Text,
-    Tk,
-    W,
-    colorchooser,
-    messagebox,
-    ttk,
-)
+import tkinter as tk
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+from importlib.metadata import version as package_version
+from pathlib import Path
+from tkinter import colorchooser, filedialog, messagebox, ttk
+
+from PIL import ImageTk
 
 from aqrgen import __version__, core, presets
 
+TITLE = "Advanced QR Code Generator"
+"""Window and message box title."""
 
-class qrCodeGen:
+PREVIEW_SIZE = 300
+"""Width and height of the preview in pixels."""
+
+PREVIEW_DELAY_MS = 300
+"""Delay after the last change before the preview is redrawn."""
+
+POLL_MS = 50
+"""Interval for checking whether background work has finished."""
+
+PAD = 5
+"""Padding around each section."""
+
+IMAGE_FILETYPES = (
+    ("Images", "*.png *.jpg *.jpeg *.gif *.bmp *.webp"),
+    ("All files", "*.*"),
+)
+"""File type filter of the image file dialogs."""
+
+PRESET_KEYS = {
+    "mess": "message",
+    "savedir": "save_dir",
+    "picname": "file_name",
+    "collide": "on_collision",
+    "size": "version",
+    "errcor": "error_correction",
+    "ext": "extension",
+    "embim": "embed_image",
+    "embimp": "embedded_image_path",
+    "bgcolor": "back_color",
+    "fcolor": "front_color",
+    "boxsize": "box_size",
+    "bdsize": "border",
+    "boxstyle": "box_style",
+    "cmask": "color_mask",
+    "cmipath": "mask_image_path",
+    "color2": "edge_color",
+}
+"""Keys used in preset files mapped to the app's variable names."""
+
+ERROR_CORRECTION_OPTIONS = (
+    ("L/low/7%", "L"),
+    ("M/medium/15%", "M"),
+    ("Q/quite-high/25%", "Q"),
+    ("H/high/30%", "H"),
+)
+BOX_STYLE_OPTIONS = (
+    ("Square", "square"),
+    ("Gapped square", "gapsquare"),
+    ("Vertical bars", "vbars"),
+    ("Circle", "circle"),
+    ("Rounded", "rounded"),
+    ("Horizontal bars", "hbars"),
+)
+COLOR_MASK_OPTIONS = (
+    ("Solid fill", "solid"),
+    ("Radial gradient", "rgrad"),
+    ("Square gradient", "sgrad"),
+    ("Horizontal gradient", "hgrad"),
+    ("Vertical gradient", "vgrad"),
+    ("Image", "image"),
+)
+
+
+class QrCodeGeneratorApp:
+    """Main window for interactive creation of QR codes.
+
+    Parameters
+    ----------
+    root : tkinter.Tk
+        Root window the app is built in.
+    """
+
     def __init__(self, root):
-        """App for interactive creation of QR codes using qrcode and
-        tkinter modules.
+        self.root = root
+        self._executor = ThreadPoolExecutor(max_workers=2)
+        self._saved = {}  # values replaced by _lock, keyed by variable
+        self._preview_job = None  # id of the scheduled preview update
+        self._preview_running = False
+        self._preview_outdated = False
+        self._preview_photo = None  # reference keeps the image alive
+        self._saving = False
+        self._closed = False
+
+        self._create_variables()
+        root.title(f"{TITLE} by Jan Klíma")
+        root.report_callback_exception = self._report_exception
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        root.bind("<Control-Return>", lambda _event: self.generate())
+
+        main = ttk.Frame(root, padding="5 5 5 10")
+        main.grid(column=0, row=0)
+        self._build_heading(main)
+        self._build_output_section(main)
+        self._build_code_section(main)
+        self._build_color_section(main)
+        self._build_style_section(main)
+        self._build_generate_section(main)
+        self._build_presets_section(main)
+        self._build_preview(main)
+
+        self._update_states()
+        for attr in PRESET_KEYS.values():
+            if attr not in ("save_dir", "file_name", "on_collision"):
+                getattr(self, attr).trace_add(
+                    "write", lambda *_: self._schedule_preview()
+                )
+        self._schedule_preview()
+        self.message_entry.focus()
+
+    # --- construction ------------------------------------------------
+
+    def _create_variables(self):
+        """Create the tkinter variables holding all settings."""
+        self.message = tk.StringVar()
+        self.save_dir = tk.StringVar()
+        self.file_name = tk.StringVar()
+        self.on_collision = tk.StringVar(value="ask")
+        self.version = tk.IntVar(value=1)
+        self.error_correction = tk.StringVar(value="M")
+        self.extension = tk.StringVar(value=".png")
+        self.embed_image = tk.BooleanVar(value=False)
+        self.embedded_image_path = tk.StringVar()
+        self.back_color = tk.StringVar(value="(255, 255, 255)")
+        self.front_color = tk.StringVar(value="(0, 0, 0)")
+        self.box_size = tk.IntVar(value=10)
+        self.border = tk.IntVar(value=5)
+        self.box_style = tk.StringVar(value="square")
+        self.color_mask = tk.StringVar(value="solid")
+        self.mask_image_path = tk.StringVar()
+        self.edge_color = tk.StringVar(value="(0, 0, 255)")
+        self.preset_name = tk.StringVar()
+        self.status = tk.StringVar()
+
+    def _build_heading(self, main):
+        """Build the title and the version line.
+
+        Parameters
+        ----------
+        main : tkinter.ttk.Frame
+            Main frame of the window.
         """
-        root.title("Advanced QR Code Generator by Jan Klíma")
-
-        mainf = ttk.Frame(root, padding="5 5 5 10")
-        mainf.grid(column=0, row=0)  # , sticky=(N, W, E, S)
-        root.columnconfigure(0, weight=1)
-        root.rowconfigure(0, weight=1)
-
-        headingf = ttk.Frame(mainf, padding="5 5 5 5")
-        headingf.grid(column=0, row=0, columnspan=8)
-        heading = ttk.Label(
-            headingf,
-            text="Advanced QR Code Generator by Jan" + " Klíma",
-            font=("Courier", 20, "bold"),
-        )
-        heading.grid(column=0, row=0)
-        subtitle = ttk.Label(
-            headingf,
-            text=f"Version {__version__}, using "
-            + f"qrcode {version('qrcode')}.",
+        frame = ttk.Frame(main, padding=PAD)
+        frame.grid(column=0, row=0, columnspan=9)
+        ttk.Label(
+            frame, text=f"{TITLE} by Jan Klíma", font=("Courier", 20, "bold")
+        ).grid(column=0, row=0)
+        ttk.Label(
+            frame,
+            text=f"Version {__version__}, using qrcode "
+            f"{package_version('qrcode')}.",
             font=("Courier", 12),
+        ).grid(column=0, row=1, sticky=tk.W)
+
+    def _build_output_section(self, main):
+        """Build the message, save location and file name inputs.
+
+        Parameters
+        ----------
+        main : tkinter.ttk.Frame
+            Main frame of the window.
+        """
+        frame = _section(main, column=0, row=1)
+        ttk.Label(frame, text="Message/URL to encode:").grid(
+            column=0, row=0, sticky=tk.W
         )
-        subtitle.grid(column=0, row=1, sticky=W)
-
-        # declare variables
-        self.pads = 5  # padding to all subframes
-        self.mbt = "Advanced QR Code Generator"  # MessageBox Title
-        self.mess = StringVar()  # entry text
-        self.savedir = StringVar(value="")  # path where to save QR Code pic
-        self.picname = StringVar()  # QR code pic name (without extension)
-        self.collide = StringVar(value="ask")  # what to do in case of
-        # ...colliding name of pic
-        self.size = IntVar(value=1)  # size of the QR code standard
-        self.errcor = StringVar(value="M")  # error correction standard
-        self.ext = StringVar(value=".png")  # final pic extension
-        self.embim = BooleanVar(value=False)  # embed an image in the center?
-        self.embimp = StringVar()  # embedded image path
-        self.bgcolor = StringVar(value="(255, 255, 255)")  # QR code background
-        # ...color
-        self.fcolor = StringVar(value="(0, 0, 0)")  # QR code face color
-        self.boxsize = IntVar(value="10")  # box_size option in qrcode module
-        self.bdsize = IntVar(value="5")  # border option in qrcode module
-        self.boxstyle = StringVar(value="square")  # box style
-        self.cmask = StringVar(value="solid")  # color_mask option in qrcode
-        # ...module
-        self.cmipath = StringVar()  # color mask image path
-        self.color2 = StringVar(value="(0, 0, 255)")  # 2nd color for cmask
-        self.presetname = StringVar()  # name of preset file to load/save,
-        # ...without extension
-
-        self.spvars = (
-            self.mess,
-            self.savedir,
-            self.picname,
-            self.collide,
-            self.size,
-            self.errcor,
-            self.ext,
-            self.embim,
-            self.embimp,
-            self.bgcolor,
-            self.fcolor,
-            self.boxsize,
-            self.bdsize,
-            self.boxstyle,
-            self.cmask,
-            self.cmipath,
-            self.color2,
-        )  # SavedPresets VARiables
-        self.spnames = (
-            "mess",
-            "savedir",
-            "picname",
-            "collide",
-            "size",
-            "errcor",
-            "ext",
-            "embim",
-            "embimp",
-            "bgcolor",
-            "fcolor",
-            "boxsize",
-            "bdsize",
-            "boxstyle",
-            "cmask",
-            "cmipath",
-            "color2",
-        )  # SavedPresets NAMES
-
-        frame01 = ttk.Frame(mainf, padding=self.pads)
-        frame01.grid(column=0, row=1, columnspan=4, sticky=W)
-        mess_label = ttk.Label(frame01, text="Message/URL to encode:")
-        mess_label.grid(column=0, row=0, sticky=W)
-        mess_entry = ttk.Entry(frame01, width=50, textvariable=self.mess)
-        mess_entry.grid(column=0, row=1, sticky=W)
-
-        frame02 = ttk.Frame(mainf, padding=self.pads)
-        frame02.grid(column=0, row=2, columnspan=4, sticky=W)
-        savedir_label = ttk.Label(
-            frame02, text="Location to save the QR code " + "at:"
+        self.message_entry = ttk.Entry(
+            frame, width=50, textvariable=self.message
         )
-        savedir_label.grid(column=0, row=0, sticky=W)
-        savedir_entry = ttk.Entry(frame02, width=50, textvariable=self.savedir)
-        savedir_entry.grid(column=0, row=1, sticky=W)
+        self.message_entry.grid(column=0, row=1, sticky=tk.W)
 
-        frame03 = ttk.Frame(mainf, padding=self.pads)
-        frame03.grid(column=0, row=3, columnspan=4, sticky=W)
-        picname_label = ttk.Label(frame03, text="QR code name:")
-        picname_label.grid(column=0, row=0, sticky=W)
-        picname_coll = ttk.Label(frame03, text="On collision:")
-        picname_coll.grid(column=1, row=0, sticky=E)
-        picname_combo = ttk.Combobox(
-            frame03,
-            textvariable=self.collide,
+        frame = _section(main, column=0, row=2)
+        ttk.Label(frame, text="Location to save the QR code at:").grid(
+            column=0, row=0, sticky=tk.W
+        )
+        ttk.Entry(frame, width=50, textvariable=self.save_dir).grid(
+            column=0, row=1, sticky=tk.W
+        )
+        ttk.Button(frame, text="Browse…", command=self._browse_save_dir).grid(
+            column=1, row=1, sticky=tk.W, padx=PAD
+        )
+
+        frame = _section(main, column=0, row=3)
+        ttk.Label(frame, text="QR code name:").grid(
+            column=0, row=0, sticky=tk.W
+        )
+        ttk.Label(frame, text="On collision:").grid(
+            column=1, row=0, sticky=tk.E
+        )
+        collision = ttk.Combobox(
+            frame,
+            textvariable=self.on_collision,
             width=14,
             values=("ask", "overwrite", "warn & abort"),
         )
-        picname_combo.state(["readonly"])
-        picname_combo.grid(column=2, row=0, sticky=E)
-        picname_entry = ttk.Entry(frame03, width=50, textvariable=self.picname)
-        picname_entry.grid(column=0, row=1, sticky=W, columnspan=3)
-
-        frame04 = ttk.Frame(mainf, padding=self.pads)
-        frame04.grid(column=0, row=4, columnspan=4, sticky=W)
-        size_label = ttk.Label(
-            frame04, text="Size standard from 1 to 40 (1 ~ " + "21x21):"
-        )
-        size_label.grid(column=0, row=0, sticky=W)
-        size_entry = ttk.Entry(frame04, width=25, textvariable=self.size)
-        size_entry.grid(column=0, row=1, sticky=W)
-
-        frame05 = ttk.Frame(mainf, padding=self.pads)
-        frame05.grid(column=0, row=5, columnspan=4, sticky=W)
-        errcor_label = ttk.Label(
-            frame05, text="Error correction standard/quality/can " + "recover:"
-        )
-        errcor_label.grid(column=0, row=0, columnspan=2, sticky=W)
-        ecl = ttk.Radiobutton(
-            frame05, text="L/low/7%", variable=self.errcor, value="L"
-        )
-        ecl.grid(column=0, row=1, sticky=W)
-        ecm = ttk.Radiobutton(
-            frame05, text="M/medium/15%", variable=self.errcor, value="M"
-        )
-        ecm.grid(column=1, row=1, sticky=W)
-        ecq = ttk.Radiobutton(
-            frame05, text="Q/quite-high/25%", variable=self.errcor, value="Q"
-        )
-        ecq.grid(column=0, row=2, sticky=W)
-        ech = ttk.Radiobutton(
-            frame05, text="H/high/30%", variable=self.errcor, value="H"
-        )
-        ech.grid(column=1, row=2, sticky=W)
-
-        frame06 = ttk.Frame(mainf, padding=self.pads)
-        frame06.grid(column=0, row=6, columnspan=4, sticky=W)
-        ext_label = ttk.Label(frame06, text="Image extension:")
-        ext_label.grid(column=0, row=0, columnspan=2, sticky=W)
-        extpng = ttk.Radiobutton(
-            frame06,
-            text="PNG",
-            variable=self.ext,
-            value=".png",
-            command=self.optMngr0,
-        )
-        extpng.grid(column=0, row=1, sticky=W)
-        extsvg = ttk.Radiobutton(
-            frame06,
-            text="SVG (only Squared style " + "and B&W color)",
-            variable=self.ext,
-            value=".svg",
-            command=self.optMngr0,
-        )
-        extsvg.grid(column=1, row=1, sticky=W)
-
-        frame07 = ttk.Frame(mainf, padding=self.pads)
-        frame07.grid(column=0, row=7, columnspan=4, sticky=W)
-        embim_check = ttk.Checkbutton(
-            frame07,
-            text="Embed a PNG image in the" + " center.",
-            variable=self.embim,
-            onvalue=True,
-            offvalue=False,
-            command=self.optMngr1,
-        )
-        embim_check.grid(column=0, row=0, sticky=W, columnspan=2)
-        embim_label = ttk.Label(frame07, text="   Path:")
-        embim_label.grid(column=0, row=1, sticky=W)
-        embim_entry = ttk.Entry(frame07, width=40, textvariable=self.embimp)
-        embim_entry.grid(column=1, row=1, sticky=W)
-
-        frame11 = ttk.Frame(mainf, padding=self.pads)
-        frame11.grid(column=4, row=1, columnspan=4, sticky=W)
-        bgcolor_label = ttk.Label(
-            frame11,
-            text="Background color (RGB " + "triplet, e.g. (255, 255, 255)):",
-        )
-        bgcolor_label.grid(column=0, row=0, sticky=W, columnspan=2)
-        bgcolor_entry = ttk.Entry(frame11, width=30, textvariable=self.bgcolor)
-        bgcolor_entry.grid(column=0, row=1, sticky=W)
-        bgcolor_selec = ttk.Button(
-            frame11, text="See palette", command=self.gimmecolorbg
-        )
-        bgcolor_selec.grid(column=1, row=1, sticky=W)
-
-        frame12 = ttk.Frame(mainf, padding=self.pads)
-        frame12.grid(column=4, row=2, columnspan=4, sticky=W)
-        fcolor_label = ttk.Label(
-            frame12, text="Face color (RGB triplet, " + "e.g. (0, 0, 0)):"
-        )
-        fcolor_label.grid(column=0, row=0, sticky=W, columnspan=2)
-        fcolor_entry = ttk.Entry(frame12, width=30, textvariable=self.fcolor)
-        fcolor_entry.grid(column=0, row=1, sticky=W)
-        fcolor_selec = ttk.Button(
-            frame12, text="See palette", command=self.gimmecolorf
-        )
-        fcolor_selec.grid(column=1, row=1, sticky=W)
-
-        frame13 = ttk.Frame(mainf, padding=self.pads)
-        frame13.grid(column=4, row=3, columnspan=4, sticky=W)
-        boxsize_label = ttk.Label(
-            frame13,
-            text="Box size (pixels per each " + "'box' in the QR code):",
-        )
-        boxsize_label.grid(column=0, row=0, sticky=W)
-        boxsize_entry = ttk.Entry(frame13, width=25, textvariable=self.boxsize)
-        boxsize_entry.grid(column=0, row=1, sticky=W)
-
-        frame14 = ttk.Frame(mainf, padding=self.pads)
-        frame14.grid(column=4, row=4, columnspan=4, sticky=W)
-        bdsize_label = ttk.Label(
-            frame14, text="Border size (in boxes, min. " + "is 4):"
-        )
-        bdsize_label.grid(column=0, row=0, sticky=W)
-        bdsize_entry = ttk.Entry(frame14, width=25, textvariable=self.bdsize)
-        bdsize_entry.grid(column=0, row=1, sticky=W)
-
-        frame15 = ttk.Frame(mainf, padding=self.pads)
-        frame15.grid(column=4, row=5, columnspan=4, sticky=W)
-        boxstyle_label = ttk.Label(frame15, text="Box style:")
-        boxstyle_label.grid(column=0, row=0, sticky=W, columnspan=3)
-        bss = ttk.Radiobutton(
-            frame15, text="Square", variable=self.boxstyle, value="square"
-        )
-        bss.grid(column=0, row=1, sticky=W)
-        bsgs = ttk.Radiobutton(
-            frame15,
-            text="Gapped square",
-            variable=self.boxstyle,
-            value="gapsquare",
-        )
-        bsgs.grid(column=1, row=1, sticky=W)
-        bsvb = ttk.Radiobutton(
-            frame15, text="Vertical bars", variable=self.boxstyle, value="vbars"
-        )
-        bsvb.grid(column=2, row=1, sticky=W)
-        bsc = ttk.Radiobutton(
-            frame15, text="Circle", variable=self.boxstyle, value="circle"
-        )
-        bsc.grid(column=0, row=2, sticky=W)
-        bsr = ttk.Radiobutton(
-            frame15, text="Rounded", variable=self.boxstyle, value="rounded"
-        )
-        bsr.grid(column=1, row=2, sticky=W)
-        bshb = ttk.Radiobutton(
-            frame15,
-            text="Horizontal bars",
-            variable=self.boxstyle,
-            value="hbars",
-        )
-        bshb.grid(column=2, row=2, sticky=W)
-
-        frame16 = ttk.Frame(mainf, padding=self.pads)
-        frame16.grid(column=4, row=6, columnspan=4, sticky=W, rowspan=2)
-        cmask_label = ttk.Label(frame16, text="Color mask:")
-        cmask_label.grid(column=0, row=0, sticky=W, columnspan=3)
-        cms = ttk.Radiobutton(
-            frame16,
-            text="Solid fill",
-            variable=self.cmask,
-            value="solid",
-            command=self.optMngr2,
-        )
-        cms.grid(column=0, row=1, sticky=W)
-        cmrg = ttk.Radiobutton(
-            frame16,
-            text="Radial gradient",
-            variable=self.cmask,
-            value="rgrad",
-            command=self.optMngr2,
-        )
-        cmrg.grid(column=1, row=1, sticky=W)
-        cmsg = ttk.Radiobutton(
-            frame16,
-            text="Square gradient",
-            variable=self.cmask,
-            value="sgrad",
-            command=self.optMngr2,
-        )
-        cmsg.grid(column=2, row=1, sticky=W)
-        cmhg = ttk.Radiobutton(
-            frame16,
-            text="Horizontal gradient",
-            variable=self.cmask,
-            value="hgrad",
-            command=self.optMngr2,
-        )
-        cmhg.grid(column=0, row=2, sticky=W)
-        cmvg = ttk.Radiobutton(
-            frame16,
-            text="Vertical gradient",
-            variable=self.cmask,
-            value="vgrad",
-            command=self.optMngr2,
-        )
-        cmvg.grid(column=1, row=2, sticky=W)
-        cmi = ttk.Radiobutton(
-            frame16,
-            text="Image (PNG)",
-            variable=self.cmask,
-            value="image",
-            command=self.optMngr2,
-        )
-        cmi.grid(column=2, row=2, sticky=W)
-        frame16s = ttk.Frame(frame16)
-        frame16s.grid(column=0, row=3, sticky=W, columnspan=3)
-        cmip_label = ttk.Label(frame16s, text="Image mask path:")
-        cmip_label.grid(column=0, row=0, sticky=W)
-        cmip_entry = ttk.Entry(frame16s, width=40, textvariable=self.cmipath)
-        cmip_entry.grid(column=1, row=0, sticky=W)
-        frame16s0 = ttk.Frame(frame16)
-        frame16s0.grid(column=0, row=4, sticky=W, columnspan=3)
-        color2_label = ttk.Label(
-            frame16s0, text="2nd color (RGB triplet, e.g." + " (0, 0, 255)):"
-        )
-        color2_label.grid(column=0, row=0, sticky=W)
-        color2_entry = ttk.Entry(frame16s0, width=15, textvariable=self.color2)
-        color2_entry.grid(column=1, row=0, sticky=W)
-        color2_selec = ttk.Button(
-            frame16s0, text="See palette", command=self.gimmecolor2
-        )
-        color2_selec.grid(column=2, row=0, sticky=W)
-
-        frame20 = ttk.Frame(mainf, padding=self.pads)
-        frame20.grid(column=0, row=10, columnspan=5, sticky=W)
-        preset_label = ttk.Label(frame20, text="Presets:")
-        preset_label.grid(column=0, row=0, sticky=W)
-        preset_entry = ttk.Entry(
-            frame20, width=20, textvariable=self.presetname
-        )
-        preset_entry.grid(column=1, row=0, sticky=W)
-        preset_load = ttk.Button(frame20, text="Load", command=self.loadpresets)
-        preset_load.grid(column=2, row=0, sticky=W, padx=5)
-        preset_save = ttk.Button(frame20, text="Save", command=self.savepresets)
-        preset_save.grid(column=3, row=0, sticky=W)
-        preset_del = ttk.Button(frame20, text="Delete", command=self.delpresets)
-        preset_del.grid(column=4, row=0, sticky=W, padx=5)
-        # list of presets
-        presli_label = ttk.Label(frame20, text="List of available presets:")
-        presli_label.grid(column=0, row=1, columnspan=4, sticky=W)
-        self.presli_text = Text(frame20, width=20)
-        # ...needs to be preserved to rearrange
-        self.presli_text.grid(column=0, row=2, columnspan=4, sticky=W, padx=5)
-        self.reloadpresli()
-
-        frame2 = ttk.Frame(mainf, padding=self.pads)
-        frame2.grid(column=2, row=9, columnspan=4)
-        butt = ttk.Button(
-            frame2, text="Generate QR code (also Crtl+Enter)", command=self.make
-        )
-        butt.grid(column=0, row=0, ipadx=10, ipady=5)
-        butt_label = ttk.Label(
-            frame2,
-            text="*Please note that generating QR "
-            + "codes may take a while\n(max. few minutes) "
-            + "and the window may freeze.",
-        )
-        butt_label.grid(column=0, row=1, sticky=W)
-
-        self.svgrelatedwidgets = (
-            bgcolor_label,
-            bgcolor_entry,
-            bgcolor_selec,
-            fcolor_label,
-            fcolor_entry,
-            fcolor_selec,
-            bsgs,
-            bsvb,
-            bsc,
-            bsr,
-            bshb,
-            cmrg,
-            cmsg,
-            cmhg,
-            cmvg,
-            cmi,
-            cmip_label,
-            cmip_entry,
-            color2_label,
-            color2_entry,
-            color2_selec,
-            embim_check,
-            embim_label,
-            embim_entry,
+        collision.state(["readonly"])
+        collision.grid(column=2, row=0, sticky=tk.E)
+        ttk.Entry(frame, width=50, textvariable=self.file_name).grid(
+            column=0, row=1, sticky=tk.W, columnspan=3
         )
 
-        self.optMngr0()
-        self.optMngr1()
-        self.optMngr2()
-        mess_entry.focus()
-        root.bind("<Control-Return>", self.make)
+    def _build_code_section(self, main):
+        """Build the size, error correction, format and logo inputs.
 
-    def qrmaker(self, *args):
-        """Make the QR code according to specifications. Returns the
-        generated image of the QR code. Raises ValueError with a
-        user-readable message if a color entry is invalid.
+        Parameters
+        ----------
+        main : tkinter.ttk.Frame
+            Main frame of the window.
         """
-        if self.ext.get() == ".svg" and self.boxstyle.get() != "square":
-            messagebox.showwarning(
-                "Warning - " + self.mbt, "Change style or extension!"
+        frame = _section(main, column=0, row=4)
+        ttk.Label(frame, text="Size standard from 1 to 40 (1 ~ 21x21):").grid(
+            column=0, row=0, sticky=tk.W
+        )
+        ttk.Entry(frame, width=25, textvariable=self.version).grid(
+            column=0, row=1, sticky=tk.W
+        )
+
+        frame = _section(main, column=0, row=5)
+        ttk.Label(
+            frame, text="Error correction standard/quality/can recover:"
+        ).grid(column=0, row=0, columnspan=2, sticky=tk.W)
+        self._error_correction_buttons = _radio_group(
+            frame, self.error_correction, ERROR_CORRECTION_OPTIONS, columns=2
+        )
+
+        frame = _section(main, column=0, row=6)
+        ttk.Label(frame, text="Image extension:").grid(
+            column=0, row=0, columnspan=2, sticky=tk.W
+        )
+        _radio_group(
+            frame,
+            self.extension,
+            (
+                ("PNG", ".png"),
+                ("SVG (only Squared style and B&W color)", ".svg"),
+            ),
+            columns=2,
+            command=self._update_states,
+        )
+
+        frame = _section(main, column=0, row=7)
+        embed_check = ttk.Checkbutton(
+            frame,
+            text="Embed an image in the center (uses error correction H).",
+            variable=self.embed_image,
+            command=self._update_states,
+        )
+        embed_check.grid(column=0, row=0, sticky=tk.W, columnspan=3)
+        self._embed_widgets = (
+            _grid(ttk.Label(frame, text="   Path:"), 0, 1),
+            _grid(
+                ttk.Entry(
+                    frame, width=40, textvariable=self.embedded_image_path
+                ),
+                1,
+                1,
+            ),
+            _grid(
+                ttk.Button(
+                    frame,
+                    text="Browse…",
+                    command=lambda: self._browse_image(
+                        self.embedded_image_path, "Image to embed"
+                    ),
+                ),
+                2,
+                1,
+                padx=PAD,
+            ),
+        )
+        self._png_only_widgets = [embed_check]
+
+    def _build_color_section(self, main):
+        """Build the background and face color inputs.
+
+        Parameters
+        ----------
+        main : tkinter.ttk.Frame
+            Main frame of the window.
+        """
+        for row, label, var, example in (
+            (1, "Background", self.back_color, "(255, 255, 255) or #ffffff"),
+            (2, "Face", self.front_color, "(0, 0, 0) or #000000"),
+        ):
+            frame = _section(main, column=4, row=row)
+            self._png_only_widgets += self._color_input(
+                frame, f"{label} color, e.g. {example}:", var, width=30
             )
-        # parse only the colors used by the selected format and mask
+
+    def _build_style_section(self, main):
+        """Build the box size, border, box style and color mask inputs.
+
+        Parameters
+        ----------
+        main : tkinter.ttk.Frame
+            Main frame of the window.
+        """
+        frame = _section(main, column=4, row=3)
+        ttk.Label(
+            frame, text="Box size (pixels per each 'box' in the QR code):"
+        ).grid(column=0, row=0, sticky=tk.W)
+        ttk.Entry(frame, width=25, textvariable=self.box_size).grid(
+            column=0, row=1, sticky=tk.W
+        )
+
+        frame = _section(main, column=4, row=4)
+        ttk.Label(frame, text="Border size (in boxes, min. is 4):").grid(
+            column=0, row=0, sticky=tk.W
+        )
+        ttk.Entry(frame, width=25, textvariable=self.border).grid(
+            column=0, row=1, sticky=tk.W
+        )
+
+        frame = _section(main, column=4, row=5)
+        ttk.Label(frame, text="Box style:").grid(
+            column=0, row=0, sticky=tk.W, columnspan=3
+        )
+        styles = _radio_group(
+            frame, self.box_style, BOX_STYLE_OPTIONS, columns=3
+        )
+
+        frame = _section(main, column=4, row=6, rowspan=2)
+        ttk.Label(frame, text="Color mask:").grid(
+            column=0, row=0, sticky=tk.W, columnspan=3
+        )
+        masks = _radio_group(
+            frame,
+            self.color_mask,
+            COLOR_MASK_OPTIONS,
+            columns=3,
+            command=self._update_states,
+        )
+        mask_frame = ttk.Frame(frame)
+        mask_frame.grid(column=0, row=3, sticky=tk.W, columnspan=3)
+        self._mask_image_widgets = (
+            _grid(ttk.Label(mask_frame, text="Image mask path:"), 0, 0),
+            _grid(
+                ttk.Entry(
+                    mask_frame, width=40, textvariable=self.mask_image_path
+                ),
+                1,
+                0,
+            ),
+            _grid(
+                ttk.Button(
+                    mask_frame,
+                    text="Browse…",
+                    command=lambda: self._browse_image(
+                        self.mask_image_path, "Image mask"
+                    ),
+                ),
+                2,
+                0,
+                padx=PAD,
+            ),
+        )
+        edge_frame = ttk.Frame(frame)
+        edge_frame.grid(column=0, row=4, sticky=tk.W, columnspan=3)
+        self._edge_widgets = self._color_input(
+            edge_frame, "2nd color, e.g. (0, 0, 255):", self.edge_color, 15
+        )
+        self._png_only_widgets += [
+            button
+            for value, button in (styles | masks).items()
+            if value not in ("square", "solid")
+        ]
+
+    def _color_input(self, frame, text, var, width):
+        """Build a labeled color entry with a palette button.
+
+        Parameters
+        ----------
+        frame : tkinter.ttk.Frame
+            Frame to build the widgets in.
+        text : str
+            Label text.
+        var : tkinter.StringVar
+            Variable holding the color.
+        width : int
+            Width of the entry in characters.
+
+        Returns
+        -------
+        list of tkinter.ttk.Widget
+            The label, the entry and the button.
+        """
+        stacked = width > 20  # long entries go below their label
+        label = _grid(ttk.Label(frame, text=text), 0, 0, columnspan=2)
+        entry = ttk.Entry(frame, width=width, textvariable=var)
+        button = ttk.Button(
+            frame, text="See palette", command=lambda: self._pick_color(var)
+        )
+        if stacked:
+            _grid(entry, 0, 1)
+            _grid(button, 1, 1)
+        else:
+            label.grid(columnspan=1)
+            _grid(entry, 1, 0)
+            _grid(button, 2, 0)
+        return [label, entry, button]
+
+    def _build_generate_section(self, main):
+        """Build the generate button and the status line.
+
+        Parameters
+        ----------
+        main : tkinter.ttk.Frame
+            Main frame of the window.
+        """
+        frame = ttk.Frame(main, padding=PAD)
+        frame.grid(column=2, row=9, columnspan=4)
+        self.generate_button = ttk.Button(
+            frame, text="Generate QR code (Ctrl+Enter)", command=self.generate
+        )
+        self.generate_button.grid(column=0, row=0, ipadx=10, ipady=5)
+        ttk.Label(frame, textvariable=self.status).grid(column=0, row=1)
+
+    def _build_presets_section(self, main):
+        """Build the preset name entry, its buttons and the preset list.
+
+        Parameters
+        ----------
+        main : tkinter.ttk.Frame
+            Main frame of the window.
+        """
+        frame = ttk.Frame(main, padding=PAD)
+        frame.grid(column=0, row=10, columnspan=5, sticky=tk.W)
+        ttk.Label(frame, text="Presets:").grid(column=0, row=0, sticky=tk.W)
+        ttk.Entry(frame, width=20, textvariable=self.preset_name).grid(
+            column=1, row=0, sticky=tk.W
+        )
+        for column, text, command in (
+            (2, "Load", self.load_preset),
+            (3, "Save", self.save_preset),
+            (4, "Delete", self.delete_preset),
+        ):
+            ttk.Button(frame, text=text, command=command).grid(
+                column=column, row=0, sticky=tk.W, padx=(PAD, 0)
+            )
+        ttk.Label(frame, text="List of available presets:").grid(
+            column=0, row=1, columnspan=4, sticky=tk.W
+        )
+        self.preset_list = tk.Text(frame, width=20)
+        self.preset_list.grid(column=0, row=2, columnspan=4, sticky=tk.W)
+        self._reload_preset_list()
+
+    def _build_preview(self, main):
+        """Build the preview area.
+
+        Parameters
+        ----------
+        main : tkinter.ttk.Frame
+            Main frame of the window.
+        """
+        frame = ttk.Frame(main, padding=PAD)
+        frame.grid(column=8, row=1, rowspan=10, sticky=tk.N)
+        ttk.Label(frame, text="Preview:").grid(column=0, row=0, sticky=tk.W)
+        box = ttk.Frame(
+            frame,
+            width=PREVIEW_SIZE + 4,
+            height=PREVIEW_SIZE + 4,
+            relief="sunken",
+            borderwidth=2,
+        )
+        box.grid(column=0, row=1)
+        box.grid_propagate(False)
+        box.columnconfigure(0, weight=1)
+        box.rowconfigure(0, weight=1)
+        self.preview_label = ttk.Label(
+            box, anchor=tk.CENTER, justify=tk.CENTER, wraplength=PREVIEW_SIZE
+        )
+        self.preview_label.grid(column=0, row=0)
+
+    # --- widget states -----------------------------------------------
+
+    def _update_states(self):
+        """Enable, disable and lock widgets according to the settings.
+
+        SVG locks the box style to square and the color mask to solid
+        fill; an embedded image locks error correction to H. The
+        previous values come back when the lock is released.
+        """
+        svg = self.extension.get() == ".svg"
+        embed = self.embed_image.get() and not svg
+        self._lock(self.box_style, "square" if svg else None)
+        self._lock(self.color_mask, "solid" if svg else None)
+        self._lock(self.error_correction, "H" if embed else None)
+        mask = self.color_mask.get()
+        _set_enabled(self._png_only_widgets, not svg)
+        _set_enabled(self._embed_widgets, embed)
+        _set_enabled(self._mask_image_widgets, mask == "image" and not svg)
+        _set_enabled(
+            self._edge_widgets, mask not in ("solid", "image") and not svg
+        )
+        _set_enabled(
+            [b for v, b in self._error_correction_buttons.items() if v != "H"],
+            not embed,
+        )
+
+    def _lock(self, var, value):
+        """Force a variable to a value, or release the lock.
+
+        Parameters
+        ----------
+        var : tkinter.Variable
+            Variable to lock.
+        value : object or None
+            Value to lock the variable to. None releases the lock and
+            restores the value from before the lock.
+        """
+        key = str(var)
+        if value is not None:
+            self._saved.setdefault(key, var.get())
+            if var.get() != value:
+                var.set(value)
+        elif key in self._saved:
+            var.set(self._saved.pop(key))
+
+    # --- settings ----------------------------------------------------
+
+    def collect_settings(self):
+        """Read all inputs into a settings object.
+
+        Returns
+        -------
+        aqrgen.core.QrSettings
+            The current settings. Colors the selected format and mask
+            do not use are left at their defaults.
+
+        Raises
+        ------
+        ValueError
+            With a user-readable message if an input is invalid.
+        """
+        png = self.extension.get() == ".png"
+        mask = self.color_mask.get()
         colors = {}
-        if self.ext.get() == ".png":
-            colors["back_color"] = self.readcolor(self.bgcolor, "Background")
-            if self.cmask.get() != "image":
-                colors["front_color"] = self.readcolor(self.fcolor, "Face")
-            if self.cmask.get() not in ("solid", "image"):
-                colors["edge_color"] = self.readcolor(self.color2, "2nd")
-        settings = core.QrSettings(
-            data=self.mess.get(),
-            version=self.size.get(),
-            error_correction=self.errcor.get(),
-            extension=self.ext.get(),
-            box_size=self.boxsize.get(),
-            border=self.bdsize.get(),
-            box_style=self.boxstyle.get(),
-            color_mask=self.cmask.get(),
-            mask_image_path=self.cmipath.get(),
+        if png:
+            colors["back_color"] = _read_color(self.back_color, "Background")
+            if mask != "image":
+                colors["front_color"] = _read_color(self.front_color, "Face")
+            if mask not in ("solid", "image"):
+                colors["edge_color"] = _read_color(self.edge_color, "2nd")
+        return core.QrSettings(
+            data=self.message.get(),
+            version=_read_int(self.version, "Size standard"),
+            error_correction=self.error_correction.get(),
+            extension=self.extension.get(),
+            box_size=_read_int(self.box_size, "Box size"),
+            border=_read_int(self.border, "Border size"),
+            box_style=self.box_style.get(),
+            color_mask=mask,
+            mask_image_path=self.mask_image_path.get() or None,
             embedded_image_path=(
-                self.embimp.get() if self.embim.get() else None
+                self.embedded_image_path.get()
+                if png and self.embed_image.get()
+                else None
             ),
             **colors,
         )
-        return core.make_qr_image(settings)
 
-    def readcolor(self, var, label):
-        """Parse the color in the given StringVar. Raises ValueError
-        with the color label prepended if the color is invalid.
+    # --- generating and saving ---------------------------------------
+
+    def is_busy(self):
+        """Tell whether a preview or a save is pending or running.
+
+        Returns
+        -------
+        bool
+            True while background work is pending or running.
         """
+        return (
+            self._saving
+            or self._preview_running
+            or self._preview_job is not None
+        )
+
+    def generate(self):
+        """Generate the QR code and save it in the background."""
+        if self._saving:
+            return
         try:
-            return core.parse_color(var.get())
+            settings = self.collect_settings()
         except ValueError as err:
-            raise ValueError(f"{label} color: {err}") from None
+            self._warn(str(err))
+            return
+        target = self._choose_target()
+        if target is None:
+            return
+        self._set_saving(True)
+        future = self._executor.submit(_render_and_save, settings, target)
+        self._when_done(future, self._finish_generate)
 
-    def make(self, *args):
-        """Function used to save generated image using the qrmaker()
-        function.
+    def _choose_target(self):
+        """Ask for missing information and resolve file name clashes.
+
+        Returns
+        -------
+        pathlib.Path or None
+            Path to save the QR code to, or None to cancel.
         """
-        if self.savedir.get() == "":
-            chngs = messagebox.askyesno(
-                "Overwrite save directory - " + self.mbt,
-                "You did not specify the saving "
-                + "directory. Do you want to use "
-                + "current directory?",
-            )
-            if not chngs:
-                messagebox.showwarning(
-                    "Warning - " + self.mbt,
-                    "No saving path entered! Image not saved.",
-                )
-                return
-            self.savedir.set(os.getcwd())
+        if not self.save_dir.get():
+            if not messagebox.askyesno(
+                f"Overwrite save directory - {TITLE}",
+                "You did not specify the saving directory. Do you want to "
+                "use current directory?",
+            ):
+                self._warn("No saving path entered! Image not saved.")
+                return None
+            self.save_dir.set(os.getcwd())
+        if not Path(self.save_dir.get()).is_dir():
+            self._warn(f"Directory {self.save_dir.get()!r} does not exist.")
+            return None
+        if not self.file_name.get():
+            self._warn("Please enter a QR code name.")
+            return None
         target = core.output_path(
-            self.savedir.get(), self.picname.get(), self.ext.get()
+            self.save_dir.get(), self.file_name.get(), self.extension.get()
         )
-        if target.exists():
-            if self.collide.get() == "ask":
-                conti = messagebox.askyesno(
-                    "Overwrite - " + self.mbt,
-                    "Image with this "
-                    + "name already exists within the "
-                    + "specified location. Do you want"
-                    + " to overwrite it?",
-                )
-                if not conti:
-                    return
-            elif self.collide.get() == "warn & abort":
-                messagebox.showwarning(
-                    "Warning - " + self.mbt,
-                    "Image with this name already exists within"
-                    + " the specified location! QR code genera"
-                    + "tion aborted.",
-                )
-                return
+        if not target.exists() or self.on_collision.get() == "overwrite":
+            return target
+        if self.on_collision.get() == "ask":
+            overwrite = messagebox.askyesno(
+                f"Overwrite - {TITLE}",
+                "Image with this name already exists within the specified "
+                "location. Do you want to overwrite it?",
+            )
+            return target if overwrite else None
+        self._warn(
+            "Image with this name already exists within the specified "
+            "location! QR code generation aborted."
+        )
+        return None
+
+    def _finish_generate(self, future):
+        """Report the result of a background save.
+
+        Parameters
+        ----------
+        future : concurrent.futures.Future
+            Finished future returned by `_render_and_save`.
+        """
+        self._set_saving(False)
         try:
-            img = self.qrmaker()
+            path = future.result()
         except ValueError as err:
-            messagebox.showwarning("Warning - " + self.mbt, str(err))
-            return
-        core.save_qr_image(
-            img, self.savedir.get(), self.picname.get(), self.ext.get()
-        )
-        messagebox.showinfo(
-            "Info - " + self.mbt, "QR code created successfully!"
-        )
+            self._warn(str(err))
+        except OSError as err:
+            self._warn(f"Saving failed: {err}")
+        else:
+            messagebox.showinfo(f"Info - {TITLE}", f"QR code saved to\n{path}")
 
-    def optMngr0(self, *args):
-        """Manages disabled state of widgets not supported in SVG image
-        format.
+    def _set_saving(self, saving):
+        """Switch the window between the idle and the saving state.
+
+        Parameters
+        ----------
+        saving : bool
+            Whether a save is running.
         """
-        if self.ext.get() == ".svg":
-            for i in self.svgrelatedwidgets:
-                i.state(["disabled"])
-        elif self.ext.get() == ".png":
-            for i in self.svgrelatedwidgets:
-                i.state(["!disabled"])
-            self.optMngr1()
-            self.optMngr2()
+        self._saving = saving
+        self.generate_button.state(["disabled" if saving else "!disabled"])
+        self.status.set("Generating…" if saving else "")
 
-    def optMngr1(self, *args):
-        """Manage disabled state of the embedded image path entry."""
-        if self.embim.get():
-            self.svgrelatedwidgets[23].state(["!disabled"])
-            self.svgrelatedwidgets[22].state(["!disabled"])
-        else:
-            self.svgrelatedwidgets[23].state(["disabled"])
-            self.svgrelatedwidgets[22].state(["disabled"])
+    # --- preview -----------------------------------------------------
 
-    def optMngr2(self, *args):
-        """Manages disabled state of second color or image mask path entries."""
-        if self.cmask.get() == "solid":
-            self.svgrelatedwidgets[19].state(["disabled"])
-            self.svgrelatedwidgets[18].state(["disabled"])
-            self.svgrelatedwidgets[20].state(["disabled"])
-            self.svgrelatedwidgets[17].state(["disabled"])
-            self.svgrelatedwidgets[16].state(["disabled"])
-        elif self.cmask.get() == "image":
-            self.svgrelatedwidgets[19].state(["disabled"])
-            self.svgrelatedwidgets[18].state(["disabled"])
-            self.svgrelatedwidgets[20].state(["disabled"])
-            self.svgrelatedwidgets[17].state(["!disabled"])
-            self.svgrelatedwidgets[16].state(["!disabled"])
-        else:
-            self.svgrelatedwidgets[19].state(["!disabled"])
-            self.svgrelatedwidgets[18].state(["!disabled"])
-            self.svgrelatedwidgets[20].state(["!disabled"])
-            self.svgrelatedwidgets[17].state(["disabled"])
-            self.svgrelatedwidgets[16].state(["disabled"])
+    def _schedule_preview(self):
+        """Redraw the preview shortly after the last change."""
+        if self._preview_job is not None:
+            self.root.after_cancel(self._preview_job)
+        self._preview_job = self.root.after(
+            PREVIEW_DELAY_MS, self._start_preview
+        )
 
-    def loadpresets(self, *args):
-        """Loads presets saved in the file specified by presetname variable."""
+    def _start_preview(self):
+        """Start rendering the preview in the background."""
+        self._preview_job = None
+        if self._preview_running:
+            self._preview_outdated = True
+            return
+        if not self.message.get():
+            self._show_preview(text="Enter a message to see a preview.")
+            return
         try:
-            dat = presets.read_preset(self.presetname.get())
-        except FileNotFoundError:
-            messagebox.showwarning(
-                "Warning - " + self.mbt,
-                "Given preset file does not exist! Please "
-                + "check the name carefully.",
-            )
+            settings = self.collect_settings()
+        except ValueError as err:
+            self._show_preview(text=str(err))
             return
-        for var, name in zip(self.spvars, self.spnames, strict=True):
-            if name not in dat:
-                continue
-            try:
-                if isinstance(var, BooleanVar):
-                    var.set({"True": True, "False": False}[dat[name]])
-                elif isinstance(var, IntVar):
-                    var.set(int(dat[name]))
-                else:
-                    var.set(dat[name])
-            except (KeyError, ValueError):
-                messagebox.showwarning(
-                    "Warning - " + self.mbt,
-                    "Loading was "
-                    + "interrupted. Check correct value "
-                    + "of:\n"
-                    + name
-                    + "="
-                    + dat[name]
-                    + "\nin "
-                    + "the .txt file.",
-                )
-        self.optMngr0()
-        self.optMngr1()
-        self.optMngr2()
-        messagebox.showinfo(
-            "Info - " + self.mbt, "Presets loaded successfully!"
+        self._preview_running = True
+        future = self._executor.submit(
+            core.make_preview, settings, PREVIEW_SIZE
         )
+        self._when_done(future, self._finish_preview)
 
-    def savepresets(self, *args):
-        """Saves actual presets into the file specified by presetname
-        variable.
+    def _finish_preview(self, future):
+        """Show a rendered preview, then render again if outdated.
+
+        Parameters
+        ----------
+        future : concurrent.futures.Future
+            Finished future returned by `aqrgen.core.make_preview`.
         """
-        if presets.preset_path(self.presetname.get()).exists():
-            conti = messagebox.askyesno(
-                "Overwrite - " + self.mbt,
-                "Presets with this name already "
-                + "exist. Do you want to "
-                + "overwrite them?",
-            )
+        self._preview_running = False
+        try:
+            image = future.result()
+        except ValueError as err:
+            self._show_preview(text=str(err))
+        except Exception as err:  # never let the preview crash
+            self._show_preview(text=f"Preview failed:\n{err}")
         else:
-            conti = True
-        if conti:
-            presets.write_preset(
-                self.presetname.get(),
-                {
-                    name: var.get()
-                    for var, name in zip(self.spvars, self.spnames, strict=True)
-                },
-            )
-            messagebox.showinfo(
-                "Info - " + self.mbt, "Presets saved successfully!"
-            )
-            self.reloadpresli()
+            self._show_preview(image=image)
+        if self._preview_outdated:
+            self._preview_outdated = False
+            self._start_preview()
 
-    def delpresets(self, *args):
-        """Deletes presets file under name presetname."""
-        if presets.preset_path(self.presetname.get()).exists():
-            conti = messagebox.askyesno(
-                "Delete presets - " + self.mbt,
-                "Do you REALL"
-                + f"Y want to delete preset {self.presetname.get()}?",
-            )
-        else:
-            conti = False
-            messagebox.showinfo(
-                "Delete presets - " + self.mbt,
-                f"There are no presets with name {self.presetname.get()}.",
-            )
-        if conti:
-            presets.delete_preset(self.presetname.get())
-            messagebox.showinfo(
-                "Delete presets - " + self.mbt,
-                f"Presets {self.presetname.get()} deleted successfully!",
-            )
-            self.reloadpresli()
+    def _show_preview(self, image=None, text=""):
+        """Show an image or a message in the preview area.
 
-    def reloadpresli(self, *args):
-        """Reloads the presets list text widget."""
-        self.presli_text["state"] = "normal"
-        npres = presets.list_presets()
-        self.presli_text.delete("1.0", "end")
-        self.presli_text.config(height=len(npres))
-        for name in npres:
-            self.presli_text.insert("end", name + "\n")
-        self.presli_text["state"] = "disabled"
+        Parameters
+        ----------
+        image : PIL.Image.Image, optional
+            Preview image.
+        text : str, optional
+            Message shown instead of an image.
+        """
+        self._preview_photo = ImageTk.PhotoImage(image) if image else None
+        self.preview_label.configure(image=self._preview_photo or "", text=text)
 
-    def pickcolor(self, var):
-        """Let the user choose a color with a dialog and store it in
-        the given StringVar as an RGB triplet. Nothing changes if the
-        dialog is cancelled.
+    def _when_done(self, future, callback):
+        """Call a function in the GUI thread once a future is done.
+
+        The callback always runs from the Tk event loop, so errors in
+        it reach `_report_exception`.
+
+        Parameters
+        ----------
+        future : concurrent.futures.Future
+            Future of the background work.
+        callback : callable
+            Called with the future as its only argument.
+        """
+
+        def check():
+            """Run the callback if the future is done, else wait."""
+            if self._closed:
+                return
+            if future.done():
+                callback(future)
+            else:
+                self.root.after(POLL_MS, check)
+
+        self.root.after(POLL_MS, check)
+
+    # --- dialogs -----------------------------------------------------
+
+    def _pick_color(self, var):
+        """Let the user choose a color in a dialog.
+
+        Parameters
+        ----------
+        var : tkinter.StringVar
+            Variable receiving the color as an RGB triplet. It is left
+            unchanged if the dialog is cancelled.
         """
         try:
             initial = core.parse_color(var.get())
@@ -683,23 +786,348 @@ class qrCodeGen:
         if rgb is not None:
             var.set(str(tuple(int(c) for c in rgb)))
 
-    def gimmecolorbg(self, *args):
-        """Lets you choose a color of the QR Code background."""
-        self.pickcolor(self.bgcolor)
+    def _browse_save_dir(self):
+        """Let the user choose the save directory in a dialog."""
+        path = filedialog.askdirectory(
+            title="Location to save the QR code at",
+            initialdir=self.save_dir.get() or os.getcwd(),
+        )
+        if path:
+            self.save_dir.set(path)
 
-    def gimmecolorf(self, *args):
-        """Lets you choose a color of the QR Code face."""
-        self.pickcolor(self.fcolor)
+    def _browse_image(self, var, title):
+        """Let the user choose an image file in a dialog.
 
-    def gimmecolor2(self, *args):
-        """Lets you choose the 2nd color of the QR Code gradient."""
-        self.pickcolor(self.color2)
+        Parameters
+        ----------
+        var : tkinter.StringVar
+            Variable receiving the path. It is left unchanged if the
+            dialog is cancelled.
+        title : str
+            Dialog title.
+        """
+        path = filedialog.askopenfilename(
+            title=title,
+            filetypes=IMAGE_FILETYPES,
+            initialdir=Path(var.get()).parent if var.get() else os.getcwd(),
+        )
+        if path:
+            var.set(path)
+
+    def _warn(self, message):
+        """Show a warning message box.
+
+        Parameters
+        ----------
+        message : str
+            Text of the warning.
+        """
+        messagebox.showwarning(f"Warning - {TITLE}", message)
+
+    def _report_exception(self, exc_type, exc, tb):
+        """Show unexpected errors in a dialog instead of the console.
+
+        Parameters
+        ----------
+        exc_type : type
+            Exception class.
+        exc : BaseException
+            The exception.
+        tb : types.TracebackType
+            Its traceback.
+        """
+        details = "".join(traceback.format_exception(exc_type, exc, tb))
+        messagebox.showerror(
+            f"Error - {TITLE}", f"Unexpected error:\n\n{details}"
+        )
+
+    # --- presets -----------------------------------------------------
+
+    def load_preset(self):
+        """Load the preset named in the preset entry."""
+        try:
+            values = presets.read_preset(self.preset_name.get())
+        except FileNotFoundError:
+            self._warn(
+                "Given preset file does not exist! Please check the name "
+                "carefully."
+            )
+            return
+        self._saved.clear()
+        invalid = []
+        for key, attr in PRESET_KEYS.items():
+            if key not in values:
+                continue
+            var = getattr(self, attr)
+            try:
+                var.set(_convert_preset_value(var, values[key]))
+            except (KeyError, ValueError):
+                invalid.append(f"{key}={values[key]}")
+        self._update_states()
+        if invalid:
+            self._warn(
+                "These values could not be loaded, check them in the "
+                "preset file:\n" + "\n".join(invalid)
+            )
+        else:
+            messagebox.showinfo(
+                f"Info - {TITLE}", "Presets loaded successfully!"
+            )
+
+    def save_preset(self):
+        """Save the current settings under the name in the preset entry.
+
+        Locked values are saved as they were before the lock.
+        """
+        name = self.preset_name.get()
+        if presets.preset_path(name).exists() and not messagebox.askyesno(
+            f"Overwrite - {TITLE}",
+            "Presets with this name already exist. Do you want to "
+            "overwrite them?",
+        ):
+            return
+        values = {}
+        for key, attr in PRESET_KEYS.items():
+            var = getattr(self, attr)
+            try:
+                values[key] = self._saved.get(str(var), var.get())
+            except tk.TclError:  # e.g. text in a number entry
+                values[key] = self.root.getvar(str(var))
+        presets.write_preset(name, values)
+        messagebox.showinfo(f"Info - {TITLE}", "Presets saved successfully!")
+        self._reload_preset_list()
+
+    def delete_preset(self):
+        """Delete the preset named in the preset entry."""
+        name = self.preset_name.get()
+        title = f"Delete presets - {TITLE}"
+        if not presets.preset_path(name).exists():
+            messagebox.showinfo(
+                title, f"There are no presets with name {name}."
+            )
+            return
+        if messagebox.askyesno(
+            title, f"Do you REALLY want to delete preset {name}?"
+        ):
+            presets.delete_preset(name)
+            messagebox.showinfo(title, f"Presets {name} deleted successfully!")
+            self._reload_preset_list()
+
+    def _reload_preset_list(self):
+        """Show the names of all saved presets in the preset list."""
+        names = presets.list_presets()
+        self.preset_list["state"] = "normal"
+        self.preset_list.delete("1.0", "end")
+        self.preset_list.config(height=len(names))
+        for name in names:
+            self.preset_list.insert("end", name + "\n")
+        self.preset_list["state"] = "disabled"
+
+    # --- shutdown ----------------------------------------------------
+
+    def close(self):
+        """Stop background work and close the window."""
+        self._closed = True
+        if self._preview_job is not None:
+            self.root.after_cancel(self._preview_job)
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        self.root.destroy()
+
+
+def _section(main, column, row, rowspan=1):
+    """Create a padded frame spanning four grid columns.
+
+    Parameters
+    ----------
+    main : tkinter.ttk.Frame
+        Main frame of the window.
+    column, row : int
+        Grid position.
+    rowspan : int, default 1
+        Number of grid rows to span.
+
+    Returns
+    -------
+    tkinter.ttk.Frame
+        The new frame.
+    """
+    frame = ttk.Frame(main, padding=PAD)
+    frame.grid(
+        column=column, row=row, columnspan=4, rowspan=rowspan, sticky=tk.W
+    )
+    return frame
+
+
+def _grid(widget, column, row, **options):
+    """Place a widget in the grid, aligned to the left.
+
+    Parameters
+    ----------
+    widget : tkinter.Widget
+        Widget to place.
+    column, row : int
+        Grid position.
+    **options
+        Further options of ``widget.grid``.
+
+    Returns
+    -------
+    tkinter.Widget
+        The widget, for chaining.
+    """
+    widget.grid(column=column, row=row, sticky=tk.W, **options)
+    return widget
+
+
+def _radio_group(frame, var, options, columns, command=None):
+    """Create radio buttons laid out in rows below row 0.
+
+    Parameters
+    ----------
+    frame : tkinter.ttk.Frame
+        Frame to build the buttons in.
+    var : tkinter.Variable
+        Variable shared by the buttons.
+    options : sequence of tuple of str
+        ``(text, value)`` pairs, one per button.
+    columns : int
+        Number of buttons per row.
+    command : callable, optional
+        Called when a button is clicked.
+
+    Returns
+    -------
+    dict
+        Buttons keyed by their value.
+    """
+    buttons = {}
+    for i, (text, value) in enumerate(options):
+        button = ttk.Radiobutton(
+            frame, text=text, variable=var, value=value, command=command
+        )
+        _grid(button, i % columns, 1 + i // columns)
+        buttons[value] = button
+    return buttons
+
+
+def _set_enabled(widgets, enabled):
+    """Enable or disable ttk widgets.
+
+    Parameters
+    ----------
+    widgets : iterable of tkinter.ttk.Widget
+        Widgets to change.
+    enabled : bool
+        Whether the widgets should be enabled.
+    """
+    for widget in widgets:
+        widget.state(["!disabled" if enabled else "disabled"])
+
+
+def _read_int(var, label):
+    """Read a whole number from an integer variable.
+
+    Parameters
+    ----------
+    var : tkinter.IntVar
+        Variable to read.
+    label : str
+        Name of the input, used in the error message.
+
+    Returns
+    -------
+    int
+        The number.
+
+    Raises
+    ------
+    ValueError
+        If the input is not a whole number.
+    """
+    try:
+        return var.get()
+    except tk.TclError:
+        raise ValueError(f"{label} must be a whole number.") from None
+
+
+def _read_color(var, label):
+    """Read a color from a string variable.
+
+    Parameters
+    ----------
+    var : tkinter.StringVar
+        Variable to read.
+    label : str
+        Name of the color, used in the error message.
+
+    Returns
+    -------
+    tuple of int
+        The color as an ``(r, g, b)`` tuple.
+
+    Raises
+    ------
+    ValueError
+        If the input is not a valid color.
+    """
+    try:
+        return core.parse_color(var.get())
+    except ValueError as err:
+        raise ValueError(f"{label} color: {err}") from None
+
+
+def _convert_preset_value(var, text):
+    """Convert a value from a preset file to the variable's type.
+
+    Parameters
+    ----------
+    var : tkinter.Variable
+        Variable the value is meant for.
+    text : str
+        Value as stored in the preset file.
+
+    Returns
+    -------
+    bool or int or str
+        The converted value.
+
+    Raises
+    ------
+    KeyError
+        If a boolean is neither ``True`` nor ``False``.
+    ValueError
+        If an integer is not a whole number.
+    """
+    if isinstance(var, tk.BooleanVar):
+        return {"True": True, "False": False}[text]
+    if isinstance(var, tk.IntVar):
+        return int(text)
+    return text
+
+
+def _render_and_save(settings, target):
+    """Generate a QR code and save it; runs in a worker thread.
+
+    Parameters
+    ----------
+    settings : aqrgen.core.QrSettings
+        Options of the QR code.
+    target : pathlib.Path
+        File to save the QR code to.
+
+    Returns
+    -------
+    pathlib.Path
+        The saved file.
+    """
+    image = core.make_qr_image(settings)
+    return core.save_qr_image(image, target.parent, target.stem, target.suffix)
 
 
 def main():
     """Start the GUI and run its main loop."""
-    root = Tk()
-    qrCodeGen(root)
+    root = tk.Tk()
+    QrCodeGeneratorApp(root)
     root.mainloop()
 
 

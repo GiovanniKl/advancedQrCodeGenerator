@@ -62,20 +62,19 @@ signatures. Both run through pre-commit.
   `aqrgen/core.py` (QR generation, `QrSettings` dataclass),
   `aqrgen/presets.py` (preset file IO), `aqrgen/gui.py` (tkinter),
   `aqrgen/__main__.py` (`python -m aqrgen`).
-- [ ] **A2** Rename the GUI to PEP 8 names (`qrCodeGen` →
-  `QrCodeGeneratorApp`, `optMngr0` → `_update_svg_state`, …). After
-  that, remove the N801/N802 per-file ignores in `pyproject.toml`.
+- [x] **A2** The GUI uses PEP 8 names (`QrCodeGeneratorApp`,
+  `message`, `save_dir`, `_update_states`, …). Preset files keep their
+  old keys (`mess=`, `picname=`, …) through `gui.PRESET_KEYS`.
 - [x] **A3** Added a `main()` function and an `if __name__ ==
   "__main__":` guard.
 - [x] **A4** Replaced the `if/elif` chains with lookup dicts (in
   `core.py`).
-- [ ] **A5** Stop toggling widgets by position
-  (`svgrelatedwidgets[23]`) and use named widget groups. Split the
-  200-statement `__init__` into builder methods (removes the PLR0915
-  ignore).
-- [ ] **A6** Convert the `gui.py` docstrings to numpydoc. Then remove
-  the remaining per-file ignores and the numpydoc hook exclude in
-  `.pre-commit-config.yaml`.
+- [x] **A5** Widgets are enabled and disabled by named groups instead
+  of list positions. `__init__` is split into one builder method per
+  section, with small helpers for repeated widget patterns.
+- [x] **A6** All of `gui.py` has numpydoc docstrings. The temporary
+  lint exceptions for it are gone; numpydoc only skips `__init__`
+  methods (documented in the class docstring) and `tests/`.
 
 ## B · Bugs and robustness
 
@@ -97,22 +96,22 @@ signatures. Both run through pre-commit.
 - [ ] **B7** Presets and output paths depend on the current working
   directory. Resolve them relative to a user config dir instead (only
   `presets.PRESETS_DIR` needs to change).
-- [ ] **B8** No input validation (version 1–40, border ≥ 4, box size
-  > 0). Bad input gives a traceback in the console. RGB values are
-  already validated (B5), and a `ValueError` from qrcode (e.g. version
-  41) already shows a warning. Once
-  this and an error dialog are done, switch `[project.scripts]` to
-  `[project.gui-scripts]` (no console window on Windows).
-- [ ] **B9** SVG + a non-square style shows a warning but still
-  generates the file.
+- [x] **B8** Inputs are validated with readable messages:
+  `core.check_settings` covers version 1–40, box size ≥ 1, border ≥ 4,
+  missing image files and option names; the GUI covers non-numbers,
+  missing save dir and empty file name. Unexpected errors show an error
+  dialog with the traceback. `aqrgen` is now a `gui-scripts` entry
+  point, so no console window opens with it on Windows.
+- [x] **B9** SVG now locks the box style to square and the color mask
+  to solid fill (previous choices come back when switching to PNG), so
+  there is nothing to warn about.
 - [~] **B10** Presets are now matched by variable name instead of line
   position, so missing or extra lines no longer break loading. Still
   to do: move to JSON, and keep a reader for the old `.txt` format.
-- [~] **B11** Done: the subtitle now shows the real app and qrcode
-  versions instead of the hard-coded "Python 3.7.7 / qrcode 7.3.1".
-  The copy-pasted color picker docstrings are fixed, and the unused
-  `clamp`/`rgb2hex`/`hex2rgb` helpers are removed. Still to do: "Crtl"
-  typo, `IntVar(value="10")`.
+- [x] **B11** The subtitle shows the real app and qrcode versions.
+  The copy-pasted docstrings, the "Crtl" typo and
+  `IntVar(value="10")` are fixed, and the unused
+  `clamp`/`rgb2hex`/`hex2rgb` helpers are removed.
 
 ## C · Installation and tooling
 
@@ -133,12 +132,13 @@ signatures. Both run through pre-commit.
 
 ## D · Quality
 
-- [x] **D5** pytest suite in `tests/` (80 tests):
+- [x] **D5** pytest suite in `tests/` (117 tests):
   - `core`: each style × mask, colors, embedded image, SVG, color
-    parsing.
+    parsing, settings validation, previews.
   - `presets`: round-trip, legacy file format.
-  - GUI behaviour with stubbed dialogs: regression tests for B1–B5 and
-    presets. These are skipped when Tk can't start (headless Linux).
+  - GUI behaviour with stubbed dialogs: saving, collisions,
+    validation, locks, file dialogs, preview, presets, error dialog.
+    These are skipped when Tk can't start (headless Linux).
 - [x] **D6** GitHub Actions (`.github/workflows/ci.yml`):
   - pre-commit
   - pytest on Python 3.11–3.14 on Ubuntu, and 3.14 on Windows
@@ -147,23 +147,25 @@ signatures. Both run through pre-commit.
   It runs on pushes to `main` and on pull requests (not for docs-only
   changes), or by hand from the Actions tab. Every job has a timeout.
 
-  The workflow passes `actionlint`. It hasn't run on GitHub yet, so
-  check the first run after pushing.
+  Verified on GitHub with a test pull request.
 
 ## E · Features
 
-- [ ] **E1** Live preview of the QR code in the window.
-- [ ] **E2** File and folder pickers for the save dir, embedded image
-  and mask image.
-- [ ] **E3** Generate in a background thread, so the window no longer
-  freezes.
-- [ ] **E4** Switch error correction to H automatically (or warn) when
-  embedding an image.
+- [x] **E1** Live preview next to the inputs. It's redrawn 0.3 s after
+  the last change, drawn with a reduced box size so even version 40
+  stays fast, and shows input errors as text instead of dialogs.
+- [x] **E2** "Browse…" buttons for the save dir, the embedded image and
+  the mask image.
+- [x] **E3** Previews and saving run in a worker thread; the Generate
+  button is disabled while saving.
+- [x] **E4** qrcode doesn't switch to H itself, it raises an error when
+  an embedded image is used with a lower level. Ticking "Embed an
+  image" now locks error correction to H (L/M/Q disabled), and
+  unticking restores the previous level.
 - [ ] **E5** Expose the new qrcode 8 features: logo size ratio, styled
   and colored SVG output.
-- [~] **E6** Hex colors: the color fields already accept `#rrggbb`
-  (B5). Still to do: mention it in the labels, or add a separate hex
-  field.
+- [x] **E6** Color fields accept `(r, g, b)` and `#rrggbb`, and the
+  labels say so.
 - [ ] **E7** Presets as a dropdown or list box instead of a read-only
   text widget.
 - [ ] **E8** Optional command-line mode (`aqrgen --preset foo "text"`)

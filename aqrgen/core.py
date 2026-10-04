@@ -4,10 +4,11 @@ The GUI (or any other front end) fills in a `QrSettings` instance and
 passes it to `make_qr_image`.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import qrcode
+from PIL import Image
 from qrcode.image.styledpil import StyledPilImage
 from qrcode.image.styles import colormasks
 from qrcode.image.styles.moduledrawers import pil as drawers
@@ -99,6 +100,49 @@ class QrSettings:
     embedded_image_path: str | None = None
 
 
+def check_settings(settings):
+    """Check that settings are valid before generating a QR code.
+
+    Parameters
+    ----------
+    settings : QrSettings
+        Options of the QR code.
+
+    Raises
+    ------
+    ValueError
+        With a user-readable message describing the first problem
+        found.
+    """
+    if not 1 <= settings.version <= 40:
+        raise ValueError("Size standard must be from 1 to 40.")
+    if settings.box_size < 1:
+        raise ValueError("Box size must be at least 1 pixel.")
+    if settings.border < 4:
+        raise ValueError("Border size must be at least 4 boxes.")
+    for value, options, name in (
+        (settings.error_correction, ERROR_CORRECTIONS, "error correction"),
+        (settings.extension, FORMATS, "image extension"),
+        (settings.box_style, MODULE_DRAWERS, "box style"),
+        (settings.color_mask, COLOR_MASKS, "color mask"),
+    ):
+        if value not in options:
+            raise ValueError(f"Unknown {name} {value!r}.")
+    if settings.extension == ".svg":
+        return
+    if settings.embedded_image_path is not None:
+        if not Path(settings.embedded_image_path).is_file():
+            raise ValueError(
+                f"Embedded image {settings.embedded_image_path!r} not found."
+            )
+        if settings.error_correction != "H":
+            raise ValueError("Embedding an image requires error correction H.")
+    if settings.color_mask == "image" and not (
+        settings.mask_image_path and Path(settings.mask_image_path).is_file()
+    ):
+        raise ValueError(f"Image mask {settings.mask_image_path!r} not found.")
+
+
 def make_qr_image(settings):
     """Generate a QR code image.
 
@@ -112,7 +156,13 @@ def make_qr_image(settings):
     qrcode.image.base.BaseImage
         Generated image (a styled PIL image for PNG, an SVG image for
         SVG). Save it with its ``save`` method.
+
+    Raises
+    ------
+    ValueError
+        If the settings are invalid, see `check_settings`.
     """
+    check_settings(settings)
     is_svg = settings.extension == ".svg"
     qr = qrcode.QRCode(
         version=settings.version,
@@ -129,6 +179,63 @@ def make_qr_image(settings):
         module_drawer=MODULE_DRAWERS[settings.box_style](),
         color_mask=_make_color_mask(settings),
         embedded_image_path=settings.embedded_image_path,
+    )
+
+
+def make_preview(settings, size):
+    """Render a QR code as a PIL image that fits into a square.
+
+    The preview is drawn with a smaller box size when possible, so it
+    stays fast even for large QR codes. SVG settings are previewed as
+    the black and white squares they produce.
+
+    Parameters
+    ----------
+    settings : QrSettings
+        Options of the QR code.
+    size : int
+        Maximum width and height of the preview in pixels.
+
+    Returns
+    -------
+    PIL.Image.Image
+        The preview image.
+
+    Raises
+    ------
+    ValueError
+        If the settings are invalid, see `check_settings`.
+    """
+    check_settings(settings)
+    if settings.extension == ".svg":
+        settings = replace(
+            settings,
+            extension=".png",
+            box_style="square",
+            color_mask="solid",
+            back_color=(255, 255, 255),
+            front_color=(0, 0, 0),
+            embedded_image_path=None,
+        )
+    # fix the version first, then draw at about twice the preview size
+    qr = qrcode.QRCode(
+        version=settings.version,
+        error_correction=ERROR_CORRECTIONS[settings.error_correction],
+        border=settings.border,
+    )
+    qr.add_data(settings.data)
+    qr.make(fit=True)
+    modules = qr.modules_count + 2 * settings.border
+    box_size = min(settings.box_size, max(1, -(-2 * size // modules)))
+    image = make_qr_image(
+        replace(settings, version=qr.version, box_size=box_size)
+    ).get_image()
+    scale = size / max(image.size)
+    resample = (
+        Image.Resampling.NEAREST if scale >= 1 else Image.Resampling.LANCZOS
+    )
+    return image.resize(
+        (round(image.width * scale), round(image.height * scale)), resample
     )
 
 

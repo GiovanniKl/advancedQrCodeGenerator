@@ -81,8 +81,18 @@ activated virtual environment). This always works. The shorter
 `aqrgen` command works too if pip's scripts folder is on your PATH
 (always the case with pipx or inside a virtual environment).
 
-Presets are saved as `.txt` files in a `presets/` folder in the
-directory you start the app from.
+- The **preview** on the right updates as you type. If an input is
+  invalid, the preview shows what's wrong.
+- **Browse…** buttons pick the save folder and image files.
+- **Generate** (or Ctrl+Enter) saves the QR code; generating runs in
+  the background, so the window stays responsive.
+- Embedding an image needs the highest error correction, so ticking
+  "Embed an image" selects H automatically. SVG output only supports
+  square, black and white modules, so the style options are locked
+  while SVG is selected.
+- Colors can be written as `(255, 128, 0)` or `#ff8000`.
+- Presets are saved as `.txt` files in a `presets/` folder in the
+  directory you start the app from.
 
 *Further instructions might be added in the future...*
 
