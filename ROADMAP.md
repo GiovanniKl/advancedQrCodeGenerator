@@ -152,7 +152,7 @@ signatures. Both run through pre-commit.
 
 ## D · Quality
 
-- [x] **D5** pytest suite in `tests/` (243 tests):
+- [x] **D5** pytest suite in `tests/` (260 tests):
   - `core`: each style × mask, eye styles, colors, logo size and
     padding, SVG styles/colors/gradients/logo, background opacity,
     color parsing, settings validation, previews.
@@ -218,6 +218,14 @@ signatures. Both run through pre-commit.
 - [x] **E11** Background opacity from 0 % (transparent) to 100 % for PNG
   (RGBA image) and SVG (`fill-opacity`, or no background rect at 0 %).
   The preview shows transparency on a checkerboard.
+- [x] **E12** "Copy PNG to clipboard" button (Ctrl+Shift+Enter) next to
+  Generate; the shortcuts are shown in gray under the buttons. tkinter
+  can only copy text, so `aqrgen/clipboard.py` uses the Win32 API via
+  ctypes on Windows (bitmap + PNG with transparency), `osascript` on
+  macOS and `wl-copy`/`xclip` on Linux. No new dependency. Tests use
+  fakes; `AQRGEN_TEST_CLIPBOARD=1` runs a real round trip on Windows.
+- [x] **E13** Tooltips on the error correction options explaining
+  L/M/Q/H (and on the copy button).
 
 ## F · Docs
 

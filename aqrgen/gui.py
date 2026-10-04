@@ -6,13 +6,14 @@ import sys
 import tkinter as tk
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from importlib.metadata import version as package_version
 from pathlib import Path
 from tkinter import colorchooser, filedialog, font, messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
-from aqrgen import __version__, core, presets
+from aqrgen import __version__, clipboard, core, presets
 
 TITLE = "Advanced QR Code Generator"
 """Window and message box title."""
@@ -28,6 +29,12 @@ PREVIEW_DELAY_MS = 300
 
 POLL_MS = 50
 """Interval for checking whether background work has finished."""
+
+STATUS_MS = 3000
+"""How long short status messages stay visible."""
+
+TOOLTIP_DELAY_MS = 500
+"""Delay before a tooltip appears."""
 
 PAD = 5
 """Basic padding between widgets in pixels."""
@@ -80,6 +87,18 @@ BOX_STYLE_OPTIONS = (
     ("Vertical bars", "vbars"),
     ("Horizontal bars", "hbars"),
 )
+ERROR_CORRECTION_TIPS = {
+    "L": "Low: still scans with about 7 % of the code damaged or covered. "
+    "Gives the smallest code for the same message.",
+    "M": "Medium: still scans with about 15 % damaged or covered. "
+    "A good default.",
+    "Q": "Quartile: still scans with about 25 % damaged or covered. "
+    "For printed codes that may get dirty or worn.",
+    "H": "High: still scans with about 30 % damaged or covered. "
+    "The largest code; required when a logo is embedded.",
+}
+"""Tooltips of the error correction buttons."""
+
 STYLE_LAYOUT = ((0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (0, 2), (1, 2))
 """Grid positions of the style buttons: squares, circles, bars."""
 COLOR_MASK_OPTIONS = (
@@ -90,6 +109,81 @@ COLOR_MASK_OPTIONS = (
     ("Vertical gradient", "vgrad"),
     ("Image", "image"),
 )
+
+
+class Tooltip:
+    """Small help text shown while the mouse rests on a widget.
+
+    Parameters
+    ----------
+    widget : tkinter.Widget
+        Widget the tooltip belongs to.
+    text : str
+        Help text.
+    """
+
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.window = None
+        self._job = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<ButtonPress>", self.hide, add="+")
+
+    def _schedule(self, _event=None):
+        """Show the tooltip after a short delay.
+
+        Parameters
+        ----------
+        _event : tkinter.Event, optional
+            The ``<Enter>`` event (unused).
+        """
+        self._cancel()
+        self._job = self.widget.after(TOOLTIP_DELAY_MS, self.show)
+
+    def _cancel(self):
+        """Cancel a scheduled tooltip."""
+        if self._job is not None:
+            self.widget.after_cancel(self._job)
+            self._job = None
+
+    def show(self):
+        """Show the tooltip below the widget."""
+        self._job = None
+        if self.window is not None:
+            return
+        self.window = tk.Toplevel(self.widget)
+        self.window.wm_overrideredirect(True)
+        self.window.wm_geometry(
+            f"+{self.widget.winfo_rootx() + 10}"
+            f"+{self.widget.winfo_rooty() + self.widget.winfo_height() + 4}"
+        )
+        tk.Label(
+            self.window,
+            text=self.text,
+            justify=tk.LEFT,
+            wraplength=320,
+            background="#ffffe0",
+            foreground="black",
+            relief="solid",
+            borderwidth=1,
+            padx=6,
+            pady=3,
+        ).pack()
+
+    def hide(self, _event=None):
+        """Hide the tooltip, or cancel it if it isn't shown yet.
+
+        Parameters
+        ----------
+        _event : tkinter.Event, optional
+            The ``<Leave>`` or ``<ButtonPress>`` event (unused).
+        """
+        self._cancel()
+        if self.window is not None:
+            self.window.destroy()
+            self.window = None
 
 
 class QrCodeGeneratorApp:
@@ -119,6 +213,9 @@ class QrCodeGeneratorApp:
         root.report_callback_exception = self._report_exception
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<Control-Return>", lambda _event: self.generate())
+        root.bind(
+            "<Control-Shift-Return>", lambda _event: self.copy_to_clipboard()
+        )
 
         self._build_header(root)
         columns = ttk.Frame(root, padding=(PAD, 0, PAD, 2 * PAD))
@@ -247,6 +344,8 @@ class QrCodeGeneratorApp:
         self._error_correction_buttons = _radio_group(
             frame, self.error_correction, ERROR_CORRECTION_OPTIONS, 4
         )
+        for value, button in self._error_correction_buttons.items():
+            button.tooltip = Tooltip(button, ERROR_CORRECTION_TIPS[value])
 
         frame = _group(column, "Dimensions")
         _spinbox_row(
@@ -456,18 +555,30 @@ class QrCodeGeneratorApp:
         )
         collision.state(["readonly"])
         _grid(collision, 3, 0, padx=(PAD, 0))
-        self.generate_button = _add(
-            frame,
-            ttk.Button(
-                frame,
-                text="Generate QR code (Ctrl+Enter)",
-                command=self.generate,
-            ),
-            sticky="",
-            pady=(2 * PAD, 0),
-            ipadx=10,
-            ipady=5,
+        actions = _add(frame, ttk.Frame(frame), sticky="", pady=(2 * PAD, 0))
+        self.generate_button = ttk.Button(
+            actions, text="Generate QR code", command=self.generate
         )
+        self.copy_button = ttk.Button(
+            actions,
+            text="Copy PNG to clipboard",
+            command=self.copy_to_clipboard,
+        )
+        self.copy_button.tooltip = Tooltip(
+            self.copy_button,
+            "Copies the QR code as a PNG image (also when SVG is "
+            "selected), e.g. to paste it into a document or a chat.",
+        )
+        for index, (button, keys) in enumerate(
+            (
+                (self.generate_button, "Ctrl+Enter"),
+                (self.copy_button, "Ctrl+Shift+Enter"),
+            )
+        ):
+            button.grid(column=index, row=0, padx=PAD, ipadx=10, ipady=5)
+            ttk.Label(actions, text=keys, foreground="gray").grid(
+                column=index, row=1
+            )
         _add(frame, ttk.Label(frame, textvariable=self.status), sticky="")
         # extra height goes below the Save group
         filler = ttk.Frame(column)
@@ -630,7 +741,7 @@ class QrCodeGeneratorApp:
     # --- generating and saving ---------------------------------------
 
     def is_busy(self):
-        """Tell whether a preview or a save is pending or running.
+        """Tell whether a preview, save or copy is pending or running.
 
         Returns
         -------
@@ -718,17 +829,73 @@ class QrCodeGeneratorApp:
         else:
             messagebox.showinfo(f"Info - {TITLE}", f"QR code saved to\n{path}")
 
-    def _set_saving(self, saving):
-        """Switch the window between the idle and the saving state.
+    def _set_saving(self, saving, message="Generating…"):
+        """Switch the window between the idle and the working state.
 
         Parameters
         ----------
         saving : bool
-            Whether a save is running.
+            Whether a save or copy is running.
+        message : str, default "Generating…"
+            Status shown while working.
         """
         self._saving = saving
-        self.generate_button.state(["disabled" if saving else "!disabled"])
-        self.status.set("Generating…" if saving else "")
+        for button in (self.generate_button, self.copy_button):
+            button.state(["disabled" if saving else "!disabled"])
+        self.status.set(message if saving else "")
+
+    def copy_to_clipboard(self):
+        """Render the QR code as PNG and copy it to the clipboard."""
+        if self._saving:
+            return
+        try:
+            settings = self.collect_settings()
+        except ValueError as err:
+            self._warn(str(err))
+            return
+        self._set_saving(True, "Copying…")
+        future = self._executor.submit(_render_png, settings)
+        self._when_done(future, self._finish_copy)
+
+    def _finish_copy(self, future):
+        """Put a rendered QR code on the clipboard.
+
+        Parameters
+        ----------
+        future : concurrent.futures.Future
+            Finished future returned by `_render_png`.
+        """
+        self._set_saving(False)
+        try:
+            clipboard.copy_image(future.result())
+        except ValueError as err:
+            self._warn(str(err))
+        except clipboard.ClipboardError as err:
+            self._warn(f"Copying to the clipboard failed: {err}")
+        else:
+            self._flash_status("QR code copied to the clipboard as PNG.")
+
+    def _flash_status(self, message):
+        """Show a status message for a few seconds.
+
+        Parameters
+        ----------
+        message : str
+            Text to show.
+        """
+        self.status.set(message)
+        self.root.after(STATUS_MS, self._clear_status, message)
+
+    def _clear_status(self, message):
+        """Clear the status line if it still shows a message.
+
+        Parameters
+        ----------
+        message : str
+            The message to clear; newer messages are kept.
+        """
+        if self.status.get() == message:
+            self.status.set("")
 
     # --- preview -----------------------------------------------------
 
@@ -1432,6 +1599,23 @@ def _checkerboard(size, square=10):
                 (x, y, x + square - 1, y + square - 1), fill=(204, 204, 204)
             )
     return board
+
+
+def _render_png(settings):
+    """Render a QR code as a PIL image; runs in a worker thread.
+
+    Parameters
+    ----------
+    settings : aqrgen.core.QrSettings
+        Options of the QR code. SVG settings are rendered as PNG.
+
+    Returns
+    -------
+    PIL.Image.Image
+        The rendered QR code.
+    """
+    png = replace(settings, extension=".png")
+    return core.make_qr_image(png).get_image()
 
 
 def _render_and_save(settings, target):

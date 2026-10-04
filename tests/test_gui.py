@@ -10,7 +10,7 @@ from tkinter import colorchooser, filedialog, messagebox
 import pytest
 from PIL import Image
 
-from aqrgen import core, gui, presets
+from aqrgen import clipboard, core, gui, presets
 
 
 class Dialogs:
@@ -624,3 +624,107 @@ def test_save_group_directly_below_preview(app):
         preview_group.winfo_y() + preview_group.winfo_height()
     )
     assert 0 <= gap <= 4 * gui.PAD
+
+
+# --- copy to clipboard -----------------------------------------------
+
+
+@pytest.fixture
+def copied(monkeypatch):
+    images = []
+    monkeypatch.setattr(clipboard, "copy_image", images.append)
+    return images
+
+
+def copy(app):
+    app.copy_to_clipboard()
+    wait_idle(app)
+
+
+def test_copy_png_to_clipboard(app, copied, dialogs):
+    app.copy_to_clipboard()
+    assert app.generate_button.instate(["disabled"])
+    assert app.copy_button.instate(["disabled"])
+    wait_idle(app)
+    (image,) = copied
+    assert image.size[0] > 100
+    assert "copied" in app.status.get()
+    assert dialogs.log == []  # no message box, just the status line
+
+
+def test_status_message_clears_only_itself(app):
+    app._flash_status("old")
+    app.status.set("newer")
+    app._clear_status("old")
+    assert app.status.get() == "newer"
+    app._clear_status("newer")
+    assert app.status.get() == ""
+
+
+def test_copy_in_svg_mode_copies_png(app, copied):
+    svg_mode(app)
+    app.box_style.set("circle")
+    copy(app)
+    (image,) = copied
+    assert image.mode in ("RGB", "RGBA")
+
+
+def test_copy_invalid_input_warns(app, copied, dialogs):
+    app.front_color.set("nope")
+    copy(app)
+    assert copied == []
+    assert dialogs.last_message().startswith("Face color")
+
+
+def test_copy_failure_warns(app, dialogs, monkeypatch):
+    def fail(image):
+        raise clipboard.ClipboardError("in use")
+
+    monkeypatch.setattr(clipboard, "copy_image", fail)
+    copy(app)
+    assert dialogs.kinds() == ["showwarning"]
+    assert "in use" in dialogs.last_message()
+
+
+def test_shortcuts_are_bound_and_shown(app):
+    assert app.root.bind("<Control-Return>")
+    assert app.root.bind("<Control-Shift-Return>")
+    hints = [
+        widget.cget("text")
+        for widget in app.generate_button.master.grid_slaves(row=1)
+    ]
+    assert sorted(hints) == ["Ctrl+Enter", "Ctrl+Shift+Enter"]
+    assert "Ctrl" not in app.generate_button.cget("text")
+    assert "Ctrl" not in app.copy_button.cget("text")
+
+
+# --- tooltips --------------------------------------------------------
+
+
+def test_error_correction_tooltips(app):
+    for value, button in app._error_correction_buttons.items():
+        assert button.tooltip.text == gui.ERROR_CORRECTION_TIPS[value]
+    assert "logo" in gui.ERROR_CORRECTION_TIPS["H"]
+
+
+def test_tooltip_shows_and_hides(app):
+    app.root.deiconify()
+    app.root.update()
+    tip = app._error_correction_buttons["Q"].tooltip
+    tip.show()
+    app.root.update()
+    assert tip.window is not None
+    assert tip.window.winfo_ismapped()
+    tip.hide()
+    assert tip.window is None
+
+
+def test_tooltip_appears_after_delay(app, monkeypatch):
+    monkeypatch.setattr(gui, "TOOLTIP_DELAY_MS", 10)
+    tip = app._error_correction_buttons["L"].tooltip
+    tip._schedule()
+    assert tip.window is None
+    time.sleep(0.05)
+    app.root.update()
+    assert tip.window is not None
+    tip.hide()

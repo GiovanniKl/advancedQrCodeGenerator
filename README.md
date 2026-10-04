@@ -88,8 +88,13 @@ activated virtual environment). This always works. The shorter
   preview shows what's wrong. Enlarge the window to enlarge the preview
   (up to twice its normal size).
 - **Browse…** buttons pick the save folder and image files.
-- **Generate** (or Ctrl+Enter) saves the QR code; generating runs in
+- **Generate** (Ctrl+Enter) saves the QR code; generating runs in
   the background, so the window stays responsive.
+- **Copy PNG to clipboard** (Ctrl+Shift+Enter) copies the QR code as
+  an image (as PNG also when SVG is selected), ready to paste into a
+  document or chat. On Linux this needs `wl-clipboard` or `xclip`.
+- Hover over the error correction options to see what L, M, Q and H
+  mean.
 - **Styles:** square, gapped square, rounded, circle, gapped circle and
   vertical/horizontal bars. The **eye style** sets the three corner
   squares separately (square eyes help scanners with fancy styles).
