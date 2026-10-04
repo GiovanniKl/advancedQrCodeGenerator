@@ -47,6 +47,8 @@ class SvgStyle:
     ----------
     back_color : tuple of int, default (255, 255, 255)
         Background RGB color.
+    back_opacity : float, default 1.0
+        Background opacity from 0 (no background) to 1 (opaque).
     front_color : tuple of int, default (0, 0, 0)
         Face RGB color, or the start color of a gradient (center,
         left or top).
@@ -61,6 +63,7 @@ class SvgStyle:
     """
 
     back_color: tuple = (255, 255, 255)
+    back_opacity: float = 1.0
     front_color: tuple = (0, 0, 0)
     edge_color: tuple = (0, 0, 255)
     gradient: str | None = None
@@ -83,8 +86,12 @@ class StyledSvgImage(SvgPathImage):
 
     def __init__(self, *args, style=None, **kwargs):
         self.style = SvgStyle() if style is None else style
-        self.background = hex_color(self.style.back_color)
+        opacity = self.style.back_opacity
+        self.background = hex_color(self.style.back_color) if opacity else None
         super().__init__(*args, **kwargs)
+        if 0 < opacity < 1:
+            # the background rect is created by SvgImage._svg
+            self._img.find("rect").set("fill-opacity", f"{opacity:g}")
 
     def process(self):
         """Build the QR code path, then apply the fill and the logo."""

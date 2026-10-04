@@ -91,7 +91,9 @@ activated virtual environment). This always works. The shorter
   squares separately (square eyes help scanners with fancy styles).
 - **Colors:** background and face color, or a gradient (radial, square,
   horizontal, vertical) between the face color and a 2nd color, or an
-  image as color mask.
+  image as color mask. The **background opacity** goes from 100 %
+  (opaque) down to 0 % (fully transparent), for PNG and SVG; the
+  preview shows transparency as a checkerboard.
 - **Logo:** tick "Embed an image" and pick an image; non-square logos
   keep their proportions. The logo size is set in % of the code width
   (25 % recommended; bigger logos can make the code unreadable).

@@ -10,7 +10,7 @@ from importlib.metadata import version as package_version
 from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
-from PIL import ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 from aqrgen import __version__, core, presets
 
@@ -47,6 +47,7 @@ PRESET_FIELDS = (
     "embedded_image_path",
     "logo_size",
     "back_color",
+    "back_opacity",
     "front_color",
     "box_size",
     "border",
@@ -147,6 +148,7 @@ class QrCodeGeneratorApp:
         self.embedded_image_path = tk.StringVar()
         self.logo_size = tk.IntVar(value=25)  # percent of the width
         self.back_color = tk.StringVar(value="(255, 255, 255)")
+        self.back_opacity = tk.IntVar(value=100)  # percent
         self.front_color = tk.StringVar(value="(0, 0, 0)")
         self.box_size = tk.IntVar(value=10)
         self.border = tk.IntVar(value=4)
@@ -329,6 +331,20 @@ class QrCodeGeneratorApp:
             self._color_input(
                 frame, f"{label} color, e.g. {example}:", var, width=30
             )
+            if var is self.back_color:
+                opacity = ttk.Frame(frame)
+                opacity.grid(column=0, row=2, columnspan=2, sticky=tk.W)
+                ttk.Label(
+                    opacity, text="Background opacity (%, 0 = transparent):"
+                ).grid(column=0, row=0, sticky=tk.W)
+                ttk.Spinbox(
+                    opacity,
+                    from_=0,
+                    to=100,
+                    increment=10,
+                    width=6,
+                    textvariable=self.back_opacity,
+                ).grid(column=1, row=0, sticky=tk.W, padx=PAD)
 
     def _build_style_section(self, main):
         """Build the box size, border, box style and color mask inputs.
@@ -656,7 +672,11 @@ class QrCodeGeneratorApp:
         """
         mask = self.color_mask.get()
         embed = self.embed_image.get()
-        colors = {"back_color": _read_color(self.back_color, "Background")}
+        colors = {
+            "back_color": _read_color(self.back_color, "Background"),
+            "back_opacity": _read_int(self.back_opacity, "Background opacity")
+            / 100,
+        }
         if mask != "image":
             colors["front_color"] = _read_color(self.front_color, "Face")
         if mask not in ("solid", "image"):
@@ -846,6 +866,9 @@ class QrCodeGeneratorApp:
         text : str, optional
             Message shown instead of an image.
         """
+        if image is not None and image.mode == "RGBA":
+            # show transparency on a checkerboard
+            image = Image.alpha_composite(_checkerboard(image.size), image)
         self._preview_photo = ImageTk.PhotoImage(image) if image else None
         self.preview_label.configure(image=self._preview_photo or "", text=text)
 
@@ -1256,6 +1279,31 @@ def _open_in_file_manager(path):
     else:
         opener = "open" if sys.platform == "darwin" else "xdg-open"
         subprocess.Popen([opener, str(path)])
+
+
+def _checkerboard(size, square=10):
+    """Create a light gray checkerboard to show transparency on.
+
+    Parameters
+    ----------
+    size : tuple of int
+        Width and height in pixels.
+    square : int, default 10
+        Side of one checkerboard square in pixels.
+
+    Returns
+    -------
+    PIL.Image.Image
+        RGBA image of the checkerboard.
+    """
+    board = Image.new("RGBA", size, (255, 255, 255, 255))
+    draw = ImageDraw.Draw(board)
+    for y in range(0, size[1], square):
+        for x in range(y // square % 2 * square, size[0], 2 * square):
+            draw.rectangle(
+                (x, y, x + square - 1, y + square - 1), fill=(204, 204, 204)
+            )
+    return board
 
 
 def _render_and_save(settings, target):

@@ -477,3 +477,49 @@ def test_imports_legacy_presets_on_start(tk_root, tmp_path, dialogs):
     finally:
         wait_idle(app)
         app.close()
+
+
+# --- background opacity ----------------------------------------------
+
+
+def test_transparent_background(app, tmp_path):
+    app.back_opacity.set(0)
+    generate(app)
+    with Image.open(tmp_path / "qr.png") as img:
+        assert img.mode == "RGBA"
+        assert img.getpixel((0, 0))[3] == 0
+    # the preview shows transparency on a checkerboard
+    assert app._preview_photo is not None
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("abc", "Background opacity must be a whole number"),
+        ("150", "Background opacity must be from 0 to 100"),
+    ],
+)
+def test_invalid_opacity_warns(app, dialogs, value, message):
+    app.root.setvar(str(app.back_opacity), value)
+    generate(app)
+    assert dialogs.last_message().startswith(message)
+
+
+def test_preset_keeps_opacity(app):
+    app.back_opacity.set(30)
+    app.preset_name.set("p")
+    app.save_preset()
+    app.back_opacity.set(100)
+    app.load_preset()
+    assert app.back_opacity.get() == 30
+
+
+def test_checkerboard():
+    board = gui._checkerboard((40, 20), square=10)
+    grey, white = (204, 204, 204, 255), (255, 255, 255, 255)
+    assert [board.getpixel(xy) for xy in ((0, 0), (10, 0), (0, 10))] == [
+        grey,
+        white,
+        white,
+    ]
+    assert board.getpixel((10, 10)) == grey

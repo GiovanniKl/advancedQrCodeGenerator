@@ -117,6 +117,9 @@ signatures. Both run through pre-commit.
   The copy-pasted docstrings, the "Crtl" typo and
   `IntVar(value="10")` are fixed, and the unused
   `clamp`/`rgb2hex`/`hex2rgb` helpers are removed.
+- [x] **B12** Palette or grayscale images (e.g. 8-bit PNGs) used as an
+  image color mask crashed generation; mask images are now converted
+  to RGB/RGBA first.
 
 ## C · Installation and tooling
 
@@ -132,15 +135,16 @@ signatures. Both run through pre-commit.
 - [x] **C4** Updated `.gitignore`.
 - [x] **C5** Ruff + numpydoc validation configured in `pyproject.toml`,
   `.pre-commit-config.yaml` added.
-- [ ] **C6** Optional: `setup.bat` / `setup.sh` one-click setup scripts.
-  Probably not needed now that pipx/uv cover users.
+- [-] **C6** ~~Optional `setup.bat` / `setup.sh` one-click setup
+  scripts.~~ Dropped: pip/pipx cover users, and the standalone `.exe`
+  (E9) will cover people without Python.
 
 ## D · Quality
 
-- [x] **D5** pytest suite in `tests/` (185 tests):
+- [x] **D5** pytest suite in `tests/` (215 tests):
   - `core`: each style × mask, eye styles, colors, logo size and
-    padding, SVG styles/colors/gradients/logo, color parsing, settings
-    validation, previews.
+    padding, SVG styles/colors/gradients/logo, background opacity,
+    color parsing, settings validation, previews.
   - `presets`: JSON round-trip, names, broken files, platform folders,
     legacy conversion and import.
   - GUI behaviour with stubbed dialogs: saving, collisions,
@@ -185,8 +189,8 @@ signatures. Both run through pre-commit.
     styles, background and face colors, radial/horizontal/vertical
     gradients matching the PNG masks, and embedded logos as base64 PNG
     (scaled down to at most 1024 px). Square gradient, image mask,
-    rounded and bar styles stay PNG-only. SVGs now always have a
-    background; a transparent option could be added later.
+    rounded and bar styles stay PNG-only. SVGs get a background rect
+    in the background color (see E11 for its opacity).
   - The preview renders SVG settings with the equivalent PNG options.
   - The GUI replaces options SVG can't do and restores them when
     switching back to PNG, unless another option was picked in the
@@ -195,10 +199,14 @@ signatures. Both run through pre-commit.
   labels say so.
 - [x] **E7** Editable preset dropdown with Load / Save / Delete / Open
   folder buttons instead of the entry and the read-only text list.
-- [ ] **E8** Optional command-line mode (`aqrgen --preset foo "text"`)
-  that reuses `core.py`.
+- [-] **E8** ~~Optional command-line mode (`aqrgen --preset foo
+  "text"`).~~ Dropped: too complicated for most users; the GUI is the
+  intended interface.
 - [ ] **E9** A standalone `.exe` via PyInstaller on GitHub Releases.
 - [ ] **E10** Modern ttk theme (e.g. `sv-ttk`).
+- [x] **E11** Background opacity from 0 % (transparent) to 100 % for PNG
+  (RGBA image) and SVG (`fill-opacity`, or no background rect at 0 %).
+  The preview shows transparency on a checkerboard.
 
 ## F · Docs
 

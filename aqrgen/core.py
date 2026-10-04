@@ -149,6 +149,8 @@ class QrSettings:
         Key of `COLOR_MASKS` or `SVG_GRADIENTS`.
     back_color : tuple of int, default (255, 255, 255)
         Background RGB color.
+    back_opacity : float, default 1.0
+        Background opacity from 0 (fully transparent) to 1 (opaque).
     front_color : tuple of int, default (0, 0, 0)
         Face (module) RGB color, or the start color of a gradient.
     edge_color : tuple of int, default (0, 0, 255)
@@ -172,6 +174,7 @@ class QrSettings:
     eye_style: str = "square"
     color_mask: str = "solid"
     back_color: Color = (255, 255, 255)
+    back_opacity: float = 1.0
     front_color: Color = (0, 0, 0)
     edge_color: Color = (0, 0, 255)
     mask_image_path: str | None = None
@@ -199,6 +202,8 @@ def check_settings(settings):
         raise ValueError("Box size must be at least 1 pixel.")
     if settings.border < 0:
         raise ValueError("Border size must not be negative.")
+    if not 0 <= settings.back_opacity <= 1:
+        raise ValueError("Background opacity must be from 0 to 100 %.")
     if settings.error_correction not in ERROR_CORRECTIONS:
         raise ValueError(
             f"Unknown error correction {settings.error_correction!r}."
@@ -265,6 +270,7 @@ def make_qr_image(settings):
             eye_drawer=SVG_DRAWERS[settings.eye_style](),
             style=SvgStyle(
                 back_color=settings.back_color,
+                back_opacity=settings.back_opacity,
                 front_color=settings.front_color,
                 edge_color=settings.edge_color,
                 gradient=SVG_GRADIENTS[settings.color_mask],
@@ -495,10 +501,22 @@ def _make_color_mask(settings):
         Color mask instance for `StyledPilImage`.
     """
     mask_class = COLOR_MASKS[settings.color_mask]
-    if settings.color_mask == "solid":
-        return mask_class(settings.back_color, settings.front_color)
-    if settings.color_mask == "image":
-        return mask_class(settings.back_color, settings.mask_image_path)
-    return mask_class(
-        settings.back_color, settings.front_color, settings.edge_color
+    alpha = round(settings.back_opacity * 255)
+    # qrcode switches to RGBA when the background has 4 values; all
+    # other colors then need an alpha value too
+    transparent = alpha < 255
+    back, front, edge = (
+        settings.back_color,
+        settings.front_color,
+        settings.edge_color,
     )
+    if transparent:
+        back, front, edge = (*back, alpha), (*front, 255), (*edge, 255)
+    if settings.color_mask == "solid":
+        return mask_class(back, front)
+    if settings.color_mask == "image":
+        # convert, so palette or grayscale images give matching pixels
+        with Image.open(settings.mask_image_path) as image:
+            colors = image.convert("RGBA" if transparent else "RGB")
+        return mask_class(back, color_mask_image=colors)
+    return mask_class(back, front, edge)

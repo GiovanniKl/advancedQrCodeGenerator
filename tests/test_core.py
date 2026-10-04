@@ -320,3 +320,64 @@ def test_preview_validates():
 
 def test_output_path(tmp_path):
     assert core.output_path(tmp_path, "a", ".png") == tmp_path / "a.png"
+
+
+# --- background opacity ----------------------------------------------
+
+
+@pytest.fixture
+def palette_mask(tmp_path):
+    # palette images used to crash the image color mask
+    path = tmp_path / "palette.png"
+    Image.new("P", (40, 40), 7).save(path)
+    return str(path)
+
+
+@pytest.mark.parametrize("opacity", [1.0, 0.5, 0.0])
+@pytest.mark.parametrize("color_mask", core.COLOR_MASKS)
+def test_png_opacity_all_masks(tmp_path, palette_mask, opacity, color_mask):
+    path = render(
+        tmp_path,
+        settings(
+            back_opacity=opacity,
+            color_mask=color_mask,
+            mask_image_path=palette_mask,
+            box_style="circle",
+        ),
+    )
+    with Image.open(path) as img:
+        assert img.mode == ("RGB" if opacity == 1 else "RGBA")
+        if opacity < 1:
+            corner = img.getpixel((0, 0))
+            assert corner == (*BACK, round(opacity * 255))
+
+
+def test_png_transparent_modules_stay_opaque(tmp_path):
+    path = render(tmp_path, settings(back_opacity=0.0))
+    with Image.open(path) as img:
+        finder = BORDER * BOX + BOX // 2
+        assert img.getpixel((finder, finder)) == (*FRONT, 255)
+
+
+@pytest.mark.parametrize(
+    ("opacity", "rects", "fill_opacity"),
+    [(1.0, 1, None), (0.4, 1, "0.4"), (0.0, 0, None)],
+)
+def test_svg_opacity(tmp_path, opacity, rects, fill_opacity):
+    root = svg_root(tmp_path, back_opacity=opacity)
+    found = children(root, "rect")
+    assert len(found) == rects
+    if found:
+        assert found[0].get("fill-opacity") == fill_opacity
+
+
+@pytest.mark.parametrize("opacity", [-0.1, 1.1])
+def test_opacity_out_of_range(opacity):
+    with pytest.raises(ValueError, match="Background opacity"):
+        core.check_settings(settings(back_opacity=opacity))
+
+
+def test_preview_keeps_transparency():
+    image = core.make_preview(settings(back_opacity=0.0), 300)
+    assert image.mode == "RGBA"
+    assert image.getpixel((0, 0))[3] == 0
