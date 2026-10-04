@@ -6,6 +6,7 @@ Skipped when Tk can't open a window (e.g. on headless Linux).
 import time
 import tkinter
 from tkinter import colorchooser, filedialog, messagebox
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -401,15 +402,25 @@ def test_preview_shows_image(app):
     assert gui.PREVIEW_SIZE <= width <= gui.MAX_PREVIEW_SIZE
 
 
-def test_preview_grows_with_window_up_to_twice(app):
-    app.root.deiconify()  # hidden windows are never laid out
-    app.root.geometry("2400x1500")
-    app.root.update()
-    wait_idle(app)
-    assert app._preview_size == gui.MAX_PREVIEW_SIZE
-    assert app._preview_photo.width() == gui.MAX_PREVIEW_SIZE
-    app.root.geometry(f"{app.root.minsize()[0]}x{app.root.minsize()[1]}")
-    wait_idle(app)
+@pytest.mark.parametrize(
+    ("space", "expected"),
+    [(200, gui.PREVIEW_SIZE), (450, 450), (5000, gui.MAX_PREVIEW_SIZE)],
+)
+def test_preview_size_follows_space(app, space, expected):
+    # synthetic resize events: independent of the screen size
+    app.root.update_idletasks()
+    column = app._preview_column
+    others = column.winfo_reqheight() - (app._preview_size + 4)
+    event = SimpleNamespace(width=space + 4, height=others + space + 4)
+    app._on_preview_area_resized(event)
+    assert app._preview_size == expected
+
+
+def test_preview_grows_with_window(app):
+    enlarge(app, 600, 600, need=150)
+    assert gui.PREVIEW_SIZE < app._preview_size <= gui.MAX_PREVIEW_SIZE
+    assert app._preview_photo.width() == app._preview_size
+    show(app, f"{app.root.minsize()[0]}x{app.root.minsize()[1]}")
     assert app._preview_size < gui.MAX_PREVIEW_SIZE
 
 
@@ -587,6 +598,21 @@ def show(app, geometry=None):
     wait_idle(app)
 
 
+def enlarge(app, extra_width, extra_height, need=50):
+    """Enlarge the window as far as the screen allows.
+
+    CI screens are small: skip the test if the window can't grow by at
+    least ``need`` pixels in both directions.
+    """
+    show(app)
+    min_width, min_height = app.root.minsize()
+    width = min(min_width + extra_width, app.root.winfo_screenwidth() - 20)
+    height = min(min_height + extra_height, app.root.winfo_screenheight() - 80)
+    if width - min_width < need or height - min_height < need:
+        pytest.skip("screen too small to enlarge the window")
+    show(app, f"{width}x{height}+0+0")
+
+
 def right_edge(widget, ancestor):
     """X of a widget's right edge, relative to an ancestor widget."""
     return widget.winfo_rootx() + widget.winfo_width() - ancestor.winfo_rootx()
@@ -612,12 +638,12 @@ def test_long_entries_fill_column_width(app):
 def test_long_entries_do_not_grow_with_window(app):
     show(app)
     before = app._save_dir_widgets[1].winfo_width()
-    show(app, "2400x1500")
+    enlarge(app, 1400, 900)
     assert app._save_dir_widgets[1].winfo_width() == before
 
 
 def test_save_group_directly_below_preview(app):
-    show(app, "2400x1500")
+    enlarge(app, 1400, 900)
     preview_group = app._preview_box.master.master
     save_group = app._save_dir_widgets[0].master.master
     gap = save_group.winfo_y() - (
