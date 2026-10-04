@@ -242,6 +242,10 @@ signatures. Both run through pre-commit.
 
 ## F · Docs
 
-- [~] **F1** README: install and usage are done. Still to do: a
-  screenshot, a feature list, the preset format.
-- [ ] **F2** `CHANGELOG.md` and version tags.
+- [x] **F1** README: welcoming introduction with highlights and a
+  privacy note (runs locally and offline, stores nothing but presets),
+  screenshot (`docs/screenshot.png`), installation of a tagged release,
+  usage steps, feature reference and the preset file format.
+- [x] **F2** `CHANGELOG.md` (Keep a Changelog) starting with v0.1.0;
+  release steps in the README's Development section; v0.1.0 is tagged
+  on `main` after merging.
