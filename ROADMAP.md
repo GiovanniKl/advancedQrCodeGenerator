@@ -1,0 +1,251 @@
+# Roadmap
+
+Planned changes for this repo. Each item has an ID, so items can be
+picked, discussed and ticked off one by one.
+
+Legend: `[ ]` planned · `[x]` done · `[~]` partly done · `[-]` dropped
+
+---
+
+## Decisions
+
+### D1 · GUI toolkit: stay on tkinter ✅
+
+Stay on tkinter, with the GUI separated from the backend (done in A1).
+Theming (e.g. `sv-ttk`) may be looked at later (E10).
+
+For reference, if a switch is ever reconsidered: use **PySide6**
+(LGPL, works with the MIT license, ~77 MB wheel). PyQt6 is GPL, and
+PyQt5 is built on Qt 5, which is end-of-life.
+
+### D2 · Dependency versions ✅
+
+| Package | Requirement | Note |
+|---|---|---|
+| Python | `>=3.11` | develop on 3.14, test down to 3.11 (see D6) |
+| `qrcode[pil]` | `>=8.2,<9` | 8.0/8.1 silently ignore `embedded_image_path` (see C3); capped below 9 to avoid API breaks |
+| `pillow` | `>=10.0` | imported directly (`PIL.ImageTk` for E1) |
+
+The code was verified on qrcode 8.2 + Pillow 12.3 (all box styles ×
+color masks, embedded image, SVG). The qrcode 8 features are used since
+E5: `embedded_image_ratio`, passing a PIL image directly
+(`embedded_image=`), separate eye drawers, and the single-path SVG
+image with its circle/gapped drawers.
+
+### D3 · Dependencies in `pyproject.toml` ✅
+
+There is no `requirements.txt`. Runtime dependencies are in
+`[project]`, dev tools in `[dependency-groups] dev`, and the `aqrgen`
+command in `[project.scripts]`.
+
+How users install it:
+- **Users:** `py -m pip install --user <GitHub archive .zip URL>` (no
+  git needed; rerun to update), then `py -m aqrgen`. pipx with the same
+  URL is suggested for isolation, and is required on Linux distributions
+  that block `pip --user` (PEP 668). Later, a standalone `.exe` (E9) can
+  cover friends without Python.
+- **Developers:** clone, then `.venv` + `pip install -e . --group dev`,
+  or just `uv sync`.
+
+### D4 · Ruff for formatting and linting, no Pylint ✅
+
+Ruff runs as formatter and linter (80 characters per line, numpydoc
+convention, 72 characters for docstrings and comments via W505).
+numpydoc's validation hook checks that docstrings match the
+signatures. Both run through pre-commit.
+
+---
+
+## A · Repo structure and code organization
+
+- [x] **A1** Split the code into a package (flat layout, no `src/`):
+  `aqrgen/core.py` (QR generation, `QrSettings` dataclass),
+  `aqrgen/presets.py` (preset file IO), `aqrgen/gui.py` (tkinter),
+  `aqrgen/__main__.py` (`python -m aqrgen`).
+- [x] **A2** The GUI uses PEP 8 names (`QrCodeGeneratorApp`,
+  `message`, `save_dir`, `_update_states`, …). Preset files keep their
+  old keys (`mess=`, `picname=`, …) through `gui.PRESET_KEYS`.
+- [x] **A3** Added a `main()` function and an `if __name__ ==
+  "__main__":` guard.
+- [x] **A4** Replaced the `if/elif` chains with lookup dicts (in
+  `core.py`).
+- [x] **A5** Widgets are enabled and disabled by named groups instead
+  of list positions. `__init__` is split into one builder method per
+  section, with small helpers for repeated widget patterns.
+- [x] **A7** Three-column layout: Content/Dimensions/Colors on the
+  left; Box style, Eye style (now radio buttons), Color mask and Logo
+  in the middle; Preview and Save (format, folder, name, Generate) on
+  the right; presets in the header. Groups have bold headings with a
+  line instead of boxes. The window can be resized; only the preview
+  grows (300 to 600 px), with the Save group right below it and spare
+  space at the bottom; the window can't shrink below its default size.
+  Long entries (message, image mask path, logo path, save folder) fill
+  their column's default width but don't grow with the window. Face color is now disabled for the image color mask (it was
+  enabled but unused). A test checks every enabled/disabled connection
+  for all format × color mask × logo combinations.
+- [x] **A6** All of `gui.py` has numpydoc docstrings. The temporary
+  lint exceptions for it are gone; numpydoc only skips `__init__`
+  methods (documented in the class docstring) and `tests/`.
+
+## B · Bugs and robustness
+
+- [x] **B1** Crash on a fresh clone: `presets/` is now created when
+  it's missing.
+- [x] **B2** "warn & abort" now aborts only when the file name
+  actually collides.
+- [x] **B3** The collision check now also runs after "use current
+  dir?" is answered.
+- [x] **B4** Cancelling the color picker keeps the old color instead of
+  crashing.
+- [x] **B5** `eval()` is gone. Colors go through `core.parse_color`
+  (accepts `(r, g, b)` or `#rrggbb`, checks the 0–255 range), and preset
+  values are converted by variable type. Invalid colors show a warning
+  instead of a traceback. Only the colors the selected mode actually
+  uses are parsed.
+- [x] **B6** Deleting a preset now uses `Path.unlink()` instead of
+  `os.system("del …")` (Windows-only, open to shell injection).
+- [x] **B7** Presets live in a per-user folder (`%APPDATA%\aqrgen\presets`,
+  `~/Library/Application Support/aqrgen/presets`,
+  `$XDG_CONFIG_HOME` or `~/.config/aqrgen/presets`), independent of the
+  working directory. No new dependency.
+- [x] **B8** Inputs are validated with readable messages:
+  `core.check_settings` covers version 1–40, box size ≥ 1, border ≥ 0
+  (4 is the default and recommendation, smaller borders are allowed),
+  missing image files and option names; the GUI covers non-numbers,
+  missing save dir and empty file name. Unexpected errors show an error
+  dialog with the traceback. `aqrgen` is now a `gui-scripts` entry
+  point, so no console window opens with it on Windows.
+- [x] **B9** SVG now locks the box style to square and the color mask
+  to solid fill (previous choices come back when switching to PNG), so
+  there is nothing to warn about.
+- [x] **B10** Presets are JSON, one `<name>.json` per preset, with
+  `format_version` and typed values (numbers, booleans), using the
+  GUI's variable names as keys. Old `.txt` presets in `./presets` are
+  imported once per folder on startup (existing JSON presets win, old
+  files stay untouched). Preset names are validated, so they can't
+  escape the folder or contain characters invalid in file names.
+- [x] **B11** The subtitle shows the real app and qrcode versions.
+  The copy-pasted docstrings, the "Crtl" typo and
+  `IntVar(value="10")` are fixed, and the unused
+  `clamp`/`rgb2hex`/`hex2rgb` helpers are removed.
+- [x] **B12** Palette or grayscale images (e.g. 8-bit PNGs) used as an
+  image color mask crashed generation; mask images are now converted
+  to RGB/RGBA first.
+
+## C · Installation and tooling
+
+- [x] **C1** `pyproject.toml` with runtime and dev dependencies and
+  the `aqrgen` command.
+- [x] **C2** Install guide in the README (pipx/uv for users;
+  venv/uv for development).
+- [x] **C3** Minimum versions checked with
+  `uv pip install --resolution lowest-direct` on Python 3.11. This
+  showed that qrcode 8.0 and 8.1 only know the misspelled
+  `embeded_image_path` and silently drop the logo, so the floor is now
+  **8.2**. Python 3.11 + qrcode 8.2 + Pillow 10.0.0 pass all tests.
+- [x] **C4** Updated `.gitignore`.
+- [x] **C5** Ruff + numpydoc validation configured in `pyproject.toml`,
+  `.pre-commit-config.yaml` added.
+- [-] **C6** ~~Optional `setup.bat` / `setup.sh` one-click setup
+  scripts.~~ Dropped: pip/pipx cover users, and the standalone `.exe`
+  (E9) will cover people without Python.
+
+## D · Quality
+
+- [x] **D5** pytest suite in `tests/` (343 tests):
+  - `core`: each style × mask, eye styles, colors, logo size and
+    padding, SVG styles/colors/gradients/logo, background opacity,
+    color parsing, settings validation, previews.
+  - `presets`: JSON round-trip, names, broken files, platform folders,
+    legacy conversion and import.
+  - GUI behaviour with stubbed dialogs: saving, collisions,
+    validation, locks, file dialogs, preview, presets, legacy import,
+    error dialog. These are skipped when Tk can't start (headless
+    Linux). `tests/conftest.py` redirects the presets folder so tests
+    never touch the real one.
+- [x] **D6** GitHub Actions (`.github/workflows/ci.yml`):
+  - pre-commit
+  - pytest on Python 3.11–3.14 on Ubuntu, and 3.14 on Windows
+  - a lowest-direct job on Windows with Python 3.11
+
+  It runs on pushes to `main` and on pull requests (not for docs-only
+  changes), or by hand from the Actions tab. Every job has a timeout.
+
+  Verified on GitHub with a test pull request.
+
+## E · Features
+
+- [x] **E1** Live preview next to the inputs. It's redrawn 0.3 s after
+  the last change, drawn with a reduced box size so even version 40
+  stays fast, and shows input errors as text instead of dialogs.
+- [x] **E2** "Browse…" buttons for the save dir, the embedded image and
+  the mask image.
+- [x] **E3** Previews and saving run in a worker thread; the Generate
+  button is disabled while saving.
+- [x] **E4** qrcode doesn't switch to H itself, it raises an error when
+  an embedded image is used with a lower level. Ticking "Embed an
+  image" now locks error correction to H (L/M/Q disabled), and
+  unticking restores the previous level.
+- [x] **E5** qrcode 8 features and styled SVG:
+  - Logo size (5–50 % of the width, default 25 %). Non-square logos
+    are padded with transparency instead of being stretched (qrcode
+    stretches them to a square).
+  - Eye style: the three finder patterns get their own style (qrcode 8
+    `eye_drawer`). The default is square, which matches the previous
+    output: qrcode always drew square eyes before.
+  - New "gapped circle" box style. qrcode only has it for SVG, so
+    `core.GappedCircleModuleDrawer` adds it for PNG.
+  - SVG (`aqrgen/svg.py`, `StyledSvgImage`): single-path output (no
+    seams between modules), square/gapped square/circle/gapped circle
+    styles, background and face colors, radial/horizontal/vertical
+    gradients matching the PNG masks, and embedded logos as base64 PNG
+    (scaled down to at most 1024 px). Square gradient, image mask,
+    rounded and bar styles stay PNG-only. SVGs get a background rect
+    in the background color (see E11 for its opacity).
+  - The preview renders SVG settings with the equivalent PNG options.
+  - The GUI replaces options SVG can't do and restores them when
+    switching back to PNG, unless another option was picked in the
+    meantime.
+- [x] **E6** Color fields accept `(r, g, b)` and `#rrggbb`, and the
+  labels say so.
+- [x] **E7** Editable preset dropdown with Load / Save / Delete / Open
+  folder buttons instead of the entry and the read-only text list.
+- [-] **E8** ~~Optional command-line mode (`aqrgen --preset foo
+  "text"`).~~ Dropped: too complicated for most users; the GUI is the
+  intended interface.
+- [ ] **E9** A standalone `.exe` via PyInstaller on GitHub Releases.
+- [ ] **E10** Modern ttk theme (e.g. `sv-ttk`).
+- [x] **E11** Background opacity from 0 % (transparent) to 100 % for PNG
+  (RGBA image) and SVG (`fill-opacity`, or no background rect at 0 %).
+  The preview shows transparency on a checkerboard.
+- [x] **E12** "Copy PNG to clipboard" button (Ctrl+Shift+Enter) next to
+  Generate; the shortcuts are shown in gray under the buttons. tkinter
+  can only copy text, so `aqrgen/clipboard.py` uses the Win32 API via
+  ctypes on Windows (bitmap + PNG with transparency), `osascript` on
+  macOS and `wl-copy`/`xclip` on Linux. No new dependency. Tests use
+  fakes; `AQRGEN_TEST_CLIPBOARD=1` runs a real round trip on Windows.
+- [x] **E13** Tooltips on the error correction options explaining
+  L/M/Q/H (and on the copy button).
+- [x] **E14** "Insert…" menu next to the message, opening a form for a
+  standard message type: Wi-Fi (`WIFI:`), contact (vCard 3.0), e-mail
+  (`mailto:`), SMS (`SMSTO:`), phone (`tel:`), WhatsApp (`wa.me` link),
+  location (Google Maps link or `geo:`), calendar event (iCalendar
+  `VEVENT`), Czech QR Platba (SPAYD, with Czech account number to IBAN
+  conversion and checksum checks) and EU SEPA payment (EPC/GiroCode).
+  Formats live in `aqrgen/payloads.py` (one dataclass per type, whose
+  fields also describe the form), the form in `aqrgen/insert_dialog.py`.
+  Forms remember their values during a session and open centered over
+  the main window. The message box is now multi-line (contacts and
+  events span several lines): it grows with its content (wrapped lines
+  included) until the left column is as tall as the tallest column,
+  then shows a scrollbar; a larger window gives it more room.
+
+## F · Docs
+
+- [x] **F1** README: welcoming introduction with highlights and a
+  privacy note (runs locally and offline, stores nothing but presets),
+  screenshot (`docs/screenshot.png`), installation of a tagged release,
+  usage steps, feature reference and the preset file format.
+- [x] **F2** `CHANGELOG.md` (Keep a Changelog) starting with v0.1.0;
+  release steps in the README's Development section; v0.1.0 is tagged
+  on `main` after merging.
