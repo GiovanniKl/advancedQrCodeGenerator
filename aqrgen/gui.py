@@ -45,11 +45,13 @@ PRESET_FIELDS = (
     "extension",
     "embed_image",
     "embedded_image_path",
+    "logo_size",
     "back_color",
     "front_color",
     "box_size",
     "border",
     "box_style",
+    "eye_style",
     "color_mask",
     "mask_image_path",
     "edge_color",
@@ -65,9 +67,10 @@ ERROR_CORRECTION_OPTIONS = (
 BOX_STYLE_OPTIONS = (
     ("Square", "square"),
     ("Gapped square", "gapsquare"),
-    ("Vertical bars", "vbars"),
-    ("Circle", "circle"),
     ("Rounded", "rounded"),
+    ("Circle", "circle"),
+    ("Gapped circle", "gapcircle"),
+    ("Vertical bars", "vbars"),
     ("Horizontal bars", "hbars"),
 )
 COLOR_MASK_OPTIONS = (
@@ -92,7 +95,9 @@ class QrCodeGeneratorApp:
     def __init__(self, root):
         self.root = root
         self._executor = ThreadPoolExecutor(max_workers=2)
-        self._saved = {}  # values replaced by _lock, keyed by variable
+        # (user value, forced value) of constrained variables, see
+        # _constrain; keyed by variable name
+        self._saved = {}
         self._preview_job = None  # id of the scheduled preview update
         self._preview_running = False
         self._preview_outdated = False
@@ -140,11 +145,13 @@ class QrCodeGeneratorApp:
         self.extension = tk.StringVar(value=".png")
         self.embed_image = tk.BooleanVar(value=False)
         self.embedded_image_path = tk.StringVar()
+        self.logo_size = tk.IntVar(value=25)  # percent of the width
         self.back_color = tk.StringVar(value="(255, 255, 255)")
         self.front_color = tk.StringVar(value="(0, 0, 0)")
         self.box_size = tk.IntVar(value=10)
         self.border = tk.IntVar(value=4)
         self.box_style = tk.StringVar(value="square")
+        self.eye_style = tk.StringVar(value="square")
         self.color_mask = tk.StringVar(value="solid")
         self.mask_image_path = tk.StringVar()
         self.edge_color = tk.StringVar(value="(0, 0, 255)")
@@ -249,10 +256,7 @@ class QrCodeGeneratorApp:
         _radio_group(
             frame,
             self.extension,
-            (
-                ("PNG", ".png"),
-                ("SVG (only Squared style and B&W color)", ".svg"),
-            ),
+            (("PNG", ".png"), ("SVG (fewer styles and color masks)", ".svg")),
             columns=2,
             command=self._update_states,
         )
@@ -286,8 +290,28 @@ class QrCodeGeneratorApp:
                 1,
                 padx=PAD,
             ),
+            _grid(
+                ttk.Label(
+                    frame, text="   Logo size (% of width, 25 recommended):"
+                ),
+                0,
+                2,
+                columnspan=2,
+            ),
+            _grid(
+                ttk.Spinbox(
+                    frame,
+                    from_=5,
+                    to=50,
+                    increment=5,
+                    width=6,
+                    textvariable=self.logo_size,
+                ),
+                2,
+                2,
+                padx=PAD,
+            ),
         )
-        self._png_only_widgets = [embed_check]
 
     def _build_color_section(self, main):
         """Build the background and face color inputs.
@@ -302,7 +326,7 @@ class QrCodeGeneratorApp:
             (2, "Face", self.front_color, "(0, 0, 0) or #000000"),
         ):
             frame = _section(main, column=4, row=row)
-            self._png_only_widgets += self._color_input(
+            self._color_input(
                 frame, f"{label} color, e.g. {example}:", var, width=30
             )
 
@@ -335,8 +359,23 @@ class QrCodeGeneratorApp:
             column=0, row=0, sticky=tk.W, columnspan=3
         )
         styles = _radio_group(
-            frame, self.box_style, BOX_STYLE_OPTIONS, columns=3
+            frame,
+            self.box_style,
+            BOX_STYLE_OPTIONS,
+            columns=3,
+            command=self._update_states,
         )
+        eye_frame = ttk.Frame(frame)
+        eye_frame.grid(column=0, row=4, sticky=tk.W, columnspan=3)
+        ttk.Label(eye_frame, text="Eye style (the 3 corner squares):").grid(
+            column=0, row=0, sticky=tk.W
+        )
+        self.eye_combo = ttk.Combobox(eye_frame, width=16)
+        self.eye_combo.state(["readonly"])
+        self.eye_combo.grid(column=1, row=0, sticky=tk.W, padx=PAD)
+        self.eye_combo.bind("<<ComboboxSelected>>", self._on_eye_selected)
+        self.eye_style.trace_add("write", lambda *_: self._show_eye_style())
+        self._show_eye_style()
 
         frame = _section(main, column=4, row=6, rowspan=2)
         ttk.Label(frame, text="Color mask:").grid(
@@ -378,10 +417,14 @@ class QrCodeGeneratorApp:
         self._edge_widgets = self._color_input(
             edge_frame, "2nd color, e.g. (0, 0, 255):", self.edge_color, 15
         )
-        self._png_only_widgets += [
+        self._png_only_widgets = [
             button
-            for value, button in (styles | masks).items()
-            if value not in ("square", "solid")
+            for value, button in styles.items()
+            if value not in core.SVG_DRAWERS
+        ] + [
+            button
+            for value, button in masks.items()
+            if value not in core.SVG_GRADIENTS
         ]
 
     def _color_input(self, frame, text, var, width):
@@ -493,47 +536,107 @@ class QrCodeGeneratorApp:
     # --- widget states -----------------------------------------------
 
     def _update_states(self):
-        """Enable, disable and lock widgets according to the settings.
+        """Enable, disable and constrain widgets according to settings.
 
-        SVG locks the box style to square and the color mask to solid
-        fill; an embedded image locks error correction to H. The
-        previous values come back when the lock is released.
+        For SVG, box and eye styles and color masks that SVG doesn't
+        support are replaced by square and solid fill; an embedded
+        image forces error correction H. The user's values come back
+        when the constraint goes away, see `_constrain`.
         """
         svg = self.extension.get() == ".svg"
-        embed = self.embed_image.get() and not svg
-        self._lock(self.box_style, "square" if svg else None)
-        self._lock(self.color_mask, "solid" if svg else None)
-        self._lock(self.error_correction, "H" if embed else None)
+        embed = self.embed_image.get()
+        self._constrain(
+            self.box_style, core.SVG_DRAWERS if svg else None, "square"
+        )
+        self._constrain(
+            self.eye_style, core.SVG_DRAWERS if svg else None, "square"
+        )
+        self._constrain(
+            self.color_mask, core.SVG_GRADIENTS if svg else None, "solid"
+        )
+        self._constrain(self.error_correction, "H" if embed else None, "H")
         mask = self.color_mask.get()
         _set_enabled(self._png_only_widgets, not svg)
         _set_enabled(self._embed_widgets, embed)
-        _set_enabled(self._mask_image_widgets, mask == "image" and not svg)
-        _set_enabled(
-            self._edge_widgets, mask not in ("solid", "image") and not svg
-        )
+        _set_enabled(self._mask_image_widgets, mask == "image")
+        _set_enabled(self._edge_widgets, mask not in ("solid", "image"))
         _set_enabled(
             [b for v, b in self._error_correction_buttons.items() if v != "H"],
             not embed,
         )
+        self.eye_combo["values"] = [
+            text
+            for text, value in BOX_STYLE_OPTIONS
+            if not svg or value in core.SVG_DRAWERS
+        ]
 
-    def _lock(self, var, value):
-        """Force a variable to a value, or release the lock.
+    def _constrain(self, var, allowed, fallback):
+        """Keep a variable within allowed values, remembering its value.
+
+        If the value is not allowed, it is replaced by the fallback.
+        Once the original value is allowed again it comes back, unless
+        the user picked another value in the meantime.
 
         Parameters
         ----------
         var : tkinter.Variable
-            Variable to lock.
-        value : object or None
-            Value to lock the variable to. None releases the lock and
-            restores the value from before the lock.
+            Variable to constrain.
+        allowed : collection or None
+            Allowed values, or None to allow every value.
+        fallback : object
+            Value used while the original value is not allowed.
         """
         key = str(var)
-        if value is not None:
-            self._saved.setdefault(key, var.get())
-            if var.get() != value:
-                var.set(value)
-        elif key in self._saved:
-            var.set(self._saved.pop(key))
+        if key in self._saved:
+            original, forced = self._saved.pop(key)
+            if var.get() == forced:  # untouched since it was forced
+                if allowed is None or original in allowed:
+                    var.set(original)
+                else:
+                    self._saved[key] = (original, forced)
+                return
+        if allowed is not None and var.get() not in allowed:
+            self._saved[key] = (var.get(), fallback)
+            var.set(fallback)
+
+    def _unconstrained_value(self, var):
+        """Return the value a variable would have without constraints.
+
+        Parameters
+        ----------
+        var : tkinter.Variable
+            Variable to read.
+
+        Returns
+        -------
+        object
+            The user's value from before a constraint, else the
+            current value.
+        """
+        original, forced = self._saved.get(str(var), (None, None))
+        current = var.get()
+        return (
+            original
+            if str(var) in self._saved and current == forced
+            else current
+        )
+
+    def _show_eye_style(self):
+        """Show the eye style variable's value in its dropdown."""
+        labels = {value: text for text, value in BOX_STYLE_OPTIONS}
+        self.eye_combo.set(labels.get(self.eye_style.get(), ""))
+
+    def _on_eye_selected(self, _event):
+        """Store the eye style picked in the dropdown.
+
+        Parameters
+        ----------
+        _event : tkinter.Event
+            The selection event (unused).
+        """
+        values = {text: value for text, value in BOX_STYLE_OPTIONS}
+        self.eye_style.set(values[self.eye_combo.get()])
+        self._update_states()
 
     # --- settings ----------------------------------------------------
 
@@ -551,15 +654,19 @@ class QrCodeGeneratorApp:
         ValueError
             With a user-readable message if an input is invalid.
         """
-        png = self.extension.get() == ".png"
         mask = self.color_mask.get()
-        colors = {}
-        if png:
-            colors["back_color"] = _read_color(self.back_color, "Background")
-            if mask != "image":
-                colors["front_color"] = _read_color(self.front_color, "Face")
-            if mask not in ("solid", "image"):
-                colors["edge_color"] = _read_color(self.edge_color, "2nd")
+        embed = self.embed_image.get()
+        colors = {"back_color": _read_color(self.back_color, "Background")}
+        if mask != "image":
+            colors["front_color"] = _read_color(self.front_color, "Face")
+        if mask not in ("solid", "image"):
+            colors["edge_color"] = _read_color(self.edge_color, "2nd")
+        logo = {}
+        if embed:
+            logo = {
+                "embedded_image_path": self.embedded_image_path.get(),
+                "logo_ratio": _read_int(self.logo_size, "Logo size") / 100,
+            }
         return core.QrSettings(
             data=self.message.get(),
             version=_read_int(self.version, "Size standard"),
@@ -568,14 +675,11 @@ class QrCodeGeneratorApp:
             box_size=_read_int(self.box_size, "Box size"),
             border=_read_int(self.border, "Border size"),
             box_style=self.box_style.get(),
+            eye_style=self.eye_style.get(),
             color_mask=mask,
             mask_image_path=self.mask_image_path.get() or None,
-            embedded_image_path=(
-                self.embedded_image_path.get()
-                if png and self.embed_image.get()
-                else None
-            ),
             **colors,
+            **logo,
         )
 
     # --- generating and saving ---------------------------------------
@@ -898,7 +1002,7 @@ class QrCodeGeneratorApp:
         for attr in PRESET_FIELDS:
             var = getattr(self, attr)
             try:
-                values[attr] = self._saved.get(str(var), var.get())
+                values[attr] = self._unconstrained_value(var)
             except tk.TclError:  # e.g. text in a number entry
                 values[attr] = str(self.root.getvar(str(var)))
         presets.write_preset(name, values)

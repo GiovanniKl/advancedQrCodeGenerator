@@ -233,19 +233,79 @@ def test_embedding_locks_error_correction(app, logo, tmp_path):
     assert state(app._error_correction_buttons["M"]) == "normal"
 
 
-def test_svg_locks_style_and_mask(app, dialogs, tmp_path):
-    # B9: SVG with a non-square style used to warn and generate anyway
-    app.box_style.set("circle")
-    app.color_mask.set("rgrad")
-    app.extension.set(".svg")
+def svg_mode(app, svg=True):
+    app.extension.set(".svg" if svg else ".png")
     app._update_states()
-    assert (app.box_style.get(), app.color_mask.get()) == ("square", "solid")
+
+
+def test_svg_replaces_unsupported_options(app, dialogs, tmp_path):
+    # B9: SVG with a non-square style used to warn and generate anyway
+    app.box_style.set("vbars")
+    app.eye_style.set("rounded")
+    app.color_mask.set("sgrad")
+    svg_mode(app)
+    assert (app.box_style.get(), app.eye_style.get()) == ("square", "square")
+    assert app.color_mask.get() == "solid"
     generate(app)
     assert (tmp_path / "qr.svg").is_file()
     assert dialogs.kinds() == ["showinfo"]
-    app.extension.set(".png")
+    svg_mode(app, svg=False)
+    assert (app.box_style.get(), app.eye_style.get()) == ("vbars", "rounded")
+    assert app.color_mask.get() == "sgrad"
+
+
+def test_svg_keeps_supported_options(app):
+    app.box_style.set("gapcircle")
+    app.color_mask.set("rgrad")
+    svg_mode(app)
+    assert (app.box_style.get(), app.color_mask.get()) == ("gapcircle", "rgrad")
+    assert state(app._edge_widgets[1]) == "normal"
+
+
+def test_choice_made_under_svg_survives(app):
+    app.box_style.set("vbars")
+    svg_mode(app)
+    app.box_style.set("circle")  # user picks another style in SVG mode
     app._update_states()
-    assert (app.box_style.get(), app.color_mask.get()) == ("circle", "rgrad")
+    svg_mode(app, svg=False)
+    assert app.box_style.get() == "circle"
+
+
+def test_eye_style_dropdown(app):
+    assert app.eye_combo.get() == "Square"
+    app.eye_combo.set("Gapped circle")
+    app.eye_combo.event_generate("<<ComboboxSelected>>")
+    app.root.update()
+    assert app.eye_style.get() == "gapcircle"
+    assert "Vertical bars" in app.eye_combo["values"]
+    svg_mode(app)
+    assert "Vertical bars" not in app.eye_combo["values"]
+    assert app.eye_combo.get() == "Gapped circle"
+
+
+def test_svg_with_logo_and_gradient(app, logo, tmp_path):
+    svg_mode(app)
+    app.color_mask.set("hgrad")
+    app.embed_image.set(True)
+    app._update_states()
+    app.embedded_image_path.set(logo)
+    generate(app)
+    text = (tmp_path / "qr.svg").read_text(encoding="utf-8")
+    assert "linearGradient" in text
+    assert "data:image/png;base64," in text
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [("abc", "Logo size must be a whole number"), ("70", "Logo size must be")],
+)
+def test_invalid_logo_size_warns(app, dialogs, logo, value, message):
+    app.embed_image.set(True)
+    app._update_states()
+    app.embedded_image_path.set(logo)
+    app.root.setvar(str(app.logo_size), value)
+    generate(app)
+    assert dialogs.last_message().startswith(message)
 
 
 def test_mask_widgets_follow_color_mask(app):
@@ -340,7 +400,7 @@ def test_preset_round_trip(app, dialogs, presets_dir):
 
 
 def test_preset_keeps_locked_values(app):
-    app.box_style.set("circle")
+    app.box_style.set("vbars")
     app.extension.set(".svg")
     app._update_states()
     app.preset_name.set("p")
@@ -352,7 +412,7 @@ def test_preset_keeps_locked_values(app):
     assert app.box_style.get() == "square"  # locked by SVG
     app.extension.set(".png")
     app._update_states()
-    assert app.box_style.get() == "circle"
+    assert app.box_style.get() == "vbars"
 
 
 def test_preset_wrong_types_warn(app, dialogs):

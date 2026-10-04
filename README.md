@@ -86,10 +86,21 @@ activated virtual environment). This always works. The shorter
 - **Browse…** buttons pick the save folder and image files.
 - **Generate** (or Ctrl+Enter) saves the QR code; generating runs in
   the background, so the window stays responsive.
-- Embedding an image needs the highest error correction, so ticking
-  "Embed an image" selects H automatically. SVG output only supports
-  square, black and white modules, so the style options are locked
-  while SVG is selected.
+- **Styles:** square, gapped square, rounded, circle, gapped circle and
+  vertical/horizontal bars. The **eye style** sets the three corner
+  squares separately (square eyes help scanners with fancy styles).
+- **Colors:** background and face color, or a gradient (radial, square,
+  horizontal, vertical) between the face color and a 2nd color, or an
+  image as color mask.
+- **Logo:** tick "Embed an image" and pick an image; non-square logos
+  keep their proportions. The logo size is set in % of the code width
+  (25 % recommended; bigger logos can make the code unreadable).
+  Embedding needs the highest error correction, so H is selected
+  automatically.
+- **SVG** output supports the square, gapped square, circle and gapped
+  circle styles, solid colors, radial/horizontal/vertical gradients and
+  logos. Options SVG can't do are greyed out while SVG is selected;
+  your previous choice comes back when you switch to PNG.
 - Colors can be written as `(255, 128, 0)` or `#ff8000`.
 - **Presets** store all settings under a name: type a name in the
   presets box and click **Save**; pick one from the dropdown and click

@@ -5,14 +5,18 @@ passes it to `make_qr_image`.
 """
 
 from dataclasses import dataclass, replace
+from decimal import Decimal
+from functools import partial
 from pathlib import Path
 
 import qrcode
-from PIL import Image
+from PIL import Image, ImageDraw
 from qrcode.image.styledpil import StyledPilImage
 from qrcode.image.styles import colormasks
 from qrcode.image.styles.moduledrawers import pil as drawers
-from qrcode.image.svg import SvgImage
+from qrcode.image.styles.moduledrawers import svg as svg_drawers
+
+from aqrgen.svg import StyledSvgImage, SvgStyle
 
 Color = tuple[int, int, int]
 
@@ -24,15 +28,71 @@ ERROR_CORRECTIONS = {
 }
 """Error correction level names mapped to qrcode constants."""
 
-MODULE_DRAWERS = {
+GAP_RATIO = Decimal("0.8")
+"""Size of gapped squares and circles relative to the box size."""
+
+
+class GappedCircleModuleDrawer(drawers.CircleModuleDrawer):
+    """PNG module drawer for circles with a gap around them.
+
+    qrcode only offers gapped circles for SVG; this is the PNG version.
+
+    Parameters
+    ----------
+    size_ratio : float, default 0.8
+        Circle diameter relative to the box size.
+    """
+
+    def __init__(self, size_ratio=float(GAP_RATIO)):
+        self.size_ratio = size_ratio
+
+    def initialize(self, *args, **kwargs):
+        """Pre-render one antialiased circle, like the parent class.
+
+        Parameters
+        ----------
+        *args, **kwargs
+            Passed on to the base drawer's ``initialize``.
+        """
+        # skip CircleModuleDrawer.initialize, which draws a full circle
+        drawers.StyledPilQRModuleDrawer.initialize(self, *args, **kwargs)
+        box_size = self.img.box_size
+        fake_size = box_size * drawers.ANTIALIASING_FACTOR
+        inset = fake_size * (1 - self.size_ratio) / 2
+        self.circle = Image.new(
+            self.img.mode,
+            (fake_size, fake_size),
+            self.img.color_mask.back_color,
+        )
+        ImageDraw.Draw(self.circle).ellipse(
+            (inset, inset, fake_size - inset, fake_size - inset),
+            fill=self.img.paint_color,
+        )
+        self.circle = self.circle.resize(
+            (box_size, box_size), Image.Resampling.LANCZOS
+        )
+
+
+PNG_DRAWERS = {
     "square": drawers.SquareModuleDrawer,
-    "gapsquare": drawers.GappedSquareModuleDrawer,
+    "gapsquare": partial(
+        drawers.GappedSquareModuleDrawer, size_ratio=float(GAP_RATIO)
+    ),
     "circle": drawers.CircleModuleDrawer,
+    "gapcircle": GappedCircleModuleDrawer,
     "rounded": drawers.RoundedModuleDrawer,
     "vbars": drawers.VerticalBarsDrawer,
     "hbars": drawers.HorizontalBarsDrawer,
 }
-"""Box style names mapped to PIL module drawer classes."""
+"""Box style names mapped to PNG module drawer factories."""
+
+SVG_DRAWERS = {
+    "square": svg_drawers.SvgPathSquareDrawer,
+    "gapsquare": partial(svg_drawers.SvgPathSquareDrawer, size_ratio=GAP_RATIO),
+    "circle": svg_drawers.SvgPathCircleDrawer,
+    "gapcircle": partial(svg_drawers.SvgPathCircleDrawer, size_ratio=GAP_RATIO),
+}
+"""Box style names mapped to SVG module drawer factories."""
 
 COLOR_MASKS = {
     "solid": colormasks.SolidFillColorMask,
@@ -42,10 +102,21 @@ COLOR_MASKS = {
     "vgrad": colormasks.VerticalGradiantColorMask,
     "image": colormasks.ImageColorMask,
 }
-"""Color mask names mapped to qrcode color mask classes."""
+"""Color mask names mapped to the PNG color mask classes."""
+
+SVG_GRADIENTS = {
+    "solid": None,
+    "rgrad": "radial",
+    "hgrad": "horizontal",
+    "vgrad": "vertical",
+}
+"""Color masks available for SVG mapped to SVG gradient shapes."""
 
 FORMATS = (".png", ".svg")
 """Supported output file extensions."""
+
+LOGO_RATIO_RANGE = (0.05, 0.5)
+"""Smallest and largest allowed logo width relative to the code."""
 
 
 @dataclass
@@ -62,28 +133,33 @@ class QrSettings:
     error_correction : {"L", "M", "Q", "H"}, default "M"
         Error correction level (recovers 7, 15, 25 or 30 % of data).
     extension : {".png", ".svg"}, default ".png"
-        Output format. SVG supports only the square style in black and
-        white; all styling options below are ignored for SVG.
+        Output format. SVG supports the box styles in `SVG_DRAWERS`
+        and the color masks in `SVG_GRADIENTS`.
     box_size : int, default 10
         Pixels per module (box).
     border : int, default 4
         Border width in modules. The QR standard recommends at least 4;
         smaller borders are allowed, e.g. for cropping.
     box_style : str, default "square"
-        Key of `MODULE_DRAWERS`.
+        Key of `PNG_DRAWERS` or `SVG_DRAWERS`.
+    eye_style : str, default "square"
+        Style of the three finder patterns ("eyes"), same keys as
+        `box_style`.
     color_mask : str, default "solid"
-        Key of `COLOR_MASKS`.
+        Key of `COLOR_MASKS` or `SVG_GRADIENTS`.
     back_color : tuple of int, default (255, 255, 255)
         Background RGB color.
     front_color : tuple of int, default (0, 0, 0)
-        Face (module) RGB color.
+        Face (module) RGB color, or the start color of a gradient.
     edge_color : tuple of int, default (0, 0, 255)
-        Second RGB color, used by the gradient color masks.
+        End color of the gradient color masks.
     mask_image_path : str or None, default None
         Path to the image used by the "image" color mask.
     embedded_image_path : str or None, default None
         Path to an image embedded in the center of the QR code, or
         None for no image.
+    logo_ratio : float, default 0.25
+        Width of the embedded image relative to the QR code width.
     """
 
     data: str
@@ -93,12 +169,14 @@ class QrSettings:
     box_size: int = 10
     border: int = 4
     box_style: str = "square"
+    eye_style: str = "square"
     color_mask: str = "solid"
     back_color: Color = (255, 255, 255)
     front_color: Color = (0, 0, 0)
     edge_color: Color = (0, 0, 255)
     mask_image_path: str | None = None
     embedded_image_path: str | None = None
+    logo_ratio: float = 0.25
 
 
 def check_settings(settings):
@@ -121,23 +199,25 @@ def check_settings(settings):
         raise ValueError("Box size must be at least 1 pixel.")
     if settings.border < 0:
         raise ValueError("Border size must not be negative.")
+    if settings.error_correction not in ERROR_CORRECTIONS:
+        raise ValueError(
+            f"Unknown error correction {settings.error_correction!r}."
+        )
+    if settings.extension not in FORMATS:
+        raise ValueError(f"Unknown image extension {settings.extension!r}.")
+    svg = settings.extension == ".svg"
+    styles = SVG_DRAWERS if svg else PNG_DRAWERS
+    masks = SVG_GRADIENTS if svg else COLOR_MASKS
+    image_format = "SVG" if svg else "PNG"
     for value, options, name in (
-        (settings.error_correction, ERROR_CORRECTIONS, "error correction"),
-        (settings.extension, FORMATS, "image extension"),
-        (settings.box_style, MODULE_DRAWERS, "box style"),
-        (settings.color_mask, COLOR_MASKS, "color mask"),
+        (settings.box_style, styles, "box style"),
+        (settings.eye_style, styles, "eye style"),
+        (settings.color_mask, masks, "color mask"),
     ):
         if value not in options:
-            raise ValueError(f"Unknown {name} {value!r}.")
-    if settings.extension == ".svg":
-        return
+            raise ValueError(f"Unknown {name} {value!r} for {image_format}.")
     if settings.embedded_image_path is not None:
-        if not Path(settings.embedded_image_path).is_file():
-            raise ValueError(
-                f"Embedded image {settings.embedded_image_path!r} not found."
-            )
-        if settings.error_correction != "H":
-            raise ValueError("Embedding an image requires error correction H.")
+        _check_logo(settings)
     if settings.color_mask == "image" and not (
         settings.mask_image_path and Path(settings.mask_image_path).is_file()
     ):
@@ -170,16 +250,39 @@ def make_qr_image(settings):
         error_correction=ERROR_CORRECTIONS[settings.error_correction],
         box_size=settings.box_size,
         border=settings.border,
-        image_factory=SvgImage if is_svg else StyledPilImage,
+        image_factory=StyledSvgImage if is_svg else StyledPilImage,
     )
     qr.add_data(settings.data)
     qr.make(fit=True)
+    logo = (
+        None
+        if settings.embedded_image_path is None
+        else load_logo(settings.embedded_image_path)
+    )
     if is_svg:
-        return qr.make_image()
+        return qr.make_image(
+            module_drawer=SVG_DRAWERS[settings.box_style](),
+            eye_drawer=SVG_DRAWERS[settings.eye_style](),
+            style=SvgStyle(
+                back_color=settings.back_color,
+                front_color=settings.front_color,
+                edge_color=settings.edge_color,
+                gradient=SVG_GRADIENTS[settings.color_mask],
+                logo=logo,
+                logo_ratio=settings.logo_ratio,
+            ),
+        )
+    logo_options = {}
+    if logo is not None:
+        logo_options = {
+            "embedded_image": logo,
+            "embedded_image_ratio": settings.logo_ratio,
+        }
     return qr.make_image(
-        module_drawer=MODULE_DRAWERS[settings.box_style](),
+        module_drawer=PNG_DRAWERS[settings.box_style](),
+        eye_drawer=PNG_DRAWERS[settings.eye_style](),
         color_mask=_make_color_mask(settings),
-        embedded_image_path=settings.embedded_image_path,
+        **logo_options,
     )
 
 
@@ -187,8 +290,8 @@ def make_preview(settings, size):
     """Render a QR code as a PIL image that fits into a square.
 
     The preview is drawn with a smaller box size when possible, so it
-    stays fast even for large QR codes. SVG settings are previewed as
-    the black and white squares they produce.
+    stays fast even for large QR codes. SVG settings are previewed with
+    the equivalent PNG options.
 
     Parameters
     ----------
@@ -208,16 +311,8 @@ def make_preview(settings, size):
         If the settings are invalid, see `check_settings`.
     """
     check_settings(settings)
-    if settings.extension == ".svg":
-        settings = replace(
-            settings,
-            extension=".png",
-            box_style="square",
-            color_mask="solid",
-            back_color=(255, 255, 255),
-            front_color=(0, 0, 0),
-            embedded_image_path=None,
-        )
+    # every SVG option has a PNG equivalent
+    settings = replace(settings, extension=".png")
     # fix the version first, then draw at about twice the preview size
     qr = qrcode.QRCode(
         version=settings.version,
@@ -238,6 +333,35 @@ def make_preview(settings, size):
     return image.resize(
         (round(image.width * scale), round(image.height * scale)), resample
     )
+
+
+def load_logo(path):
+    """Load an image to embed, padded to a square if necessary.
+
+    qrcode stretches embedded images to a square; padding non-square
+    images with transparency keeps their proportions.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Path to the image.
+
+    Returns
+    -------
+    PIL.Image.Image
+        The image, square.
+    """
+    with Image.open(path) as image:
+        logo = image.copy()
+    if logo.width == logo.height:
+        return logo
+    side = max(logo.size)
+    square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    square.paste(
+        logo.convert("RGBA"),
+        ((side - logo.width) // 2, (side - logo.height) // 2),
+    )
+    return square
 
 
 def parse_color(text):
@@ -324,6 +448,37 @@ def save_qr_image(image, directory, name, extension):
     path = output_path(directory, name, extension)
     image.save(path)
     return path
+
+
+def _check_logo(settings):
+    """Check the embedded image settings.
+
+    Parameters
+    ----------
+    settings : QrSettings
+        Options of the QR code, with an embedded image.
+
+    Raises
+    ------
+    ValueError
+        If the image is missing or unreadable, the logo size is out of
+        range, or error correction is not H.
+    """
+    path = settings.embedded_image_path
+    if not Path(path).is_file():
+        raise ValueError(f"Embedded image {path!r} not found.")
+    try:
+        with Image.open(path) as image:
+            image.verify()
+    except (OSError, SyntaxError):  # PIL raises SyntaxError for some files
+        raise ValueError(f"Embedded image {path!r} is not an image.") from None
+    low, high = LOGO_RATIO_RANGE
+    if not low <= settings.logo_ratio <= high:
+        raise ValueError(
+            f"Logo size must be from {low:.0%} to {high:.0%} of the width."
+        )
+    if settings.error_correction != "H":
+        raise ValueError("Embedding an image requires error correction H.")
 
 
 def _make_color_mask(settings):

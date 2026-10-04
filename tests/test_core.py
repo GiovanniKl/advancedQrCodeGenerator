@@ -1,5 +1,7 @@
 """Tests of the GUI-independent QR code generation."""
 
+import base64
+import io
 import time
 import xml.etree.ElementTree as ET
 
@@ -86,7 +88,7 @@ def test_parse_color_invalid(text):
 # --- make_qr_image ---------------------------------------------------
 
 
-@pytest.mark.parametrize("box_style", core.MODULE_DRAWERS)
+@pytest.mark.parametrize("box_style", core.PNG_DRAWERS)
 @pytest.mark.parametrize("color_mask", core.COLOR_MASKS)
 def test_png_all_styles_and_masks(tmp_path, logo, box_style, color_mask):
     path = render(
@@ -121,11 +123,100 @@ def test_version_grows_to_fit_data(tmp_path):
         assert img.size[0] > SIDE
 
 
-def test_svg(tmp_path):
-    # styling options are ignored for SVG
-    path = render(tmp_path, settings(extension=".svg", box_style="circle"))
+@pytest.mark.parametrize(
+    ("eye_style", "corner"), [("square", FRONT), ("circle", BACK)]
+)
+def test_png_eye_style(tmp_path, eye_style, corner):
+    # the top-left eye's outer corner pixel is only set for squares;
+    # big boxes keep that pixel clear of the circles' antialiasing
+    box = 20
+    path = render(
+        tmp_path,
+        settings(box_style="circle", eye_style=eye_style, box_size=box),
+    )
+    with Image.open(path) as img:
+        assert img.getpixel((BORDER * box, BORDER * box))[:3] == corner
+
+
+def test_png_logo_size(tmp_path, logo):
+    def red_pixels(ratio):
+        path = render(
+            tmp_path, settings(embedded_image_path=logo, logo_ratio=ratio)
+        )
+        with Image.open(path) as img:
+            colors = img.convert("RGB").getcolors(maxcolors=1 << 24)
+        return dict((color, n) for n, color in colors).get((255, 0, 0), 0)
+
+    assert red_pixels(0.4) > 2 * red_pixels(0.2)
+
+
+def test_load_logo_pads_to_square(tmp_path):
+    path = tmp_path / "wide.png"
+    Image.new("RGB", (60, 20), (255, 0, 0)).save(path)
+    logo = core.load_logo(path)
+    assert logo.size == (60, 60)
+    assert logo.getpixel((30, 30)) == (255, 0, 0, 255)
+    assert logo.getpixel((30, 5))[3] == 0  # transparent padding
+
+
+def test_load_logo_keeps_square_images(logo):
+    image = core.load_logo(logo)
+    assert (image.size, image.mode) == ((60, 60), "RGB")
+
+
+# --- SVG -------------------------------------------------------------
+
+
+def svg_root(tmp_path, **kwargs):
+    path = render(tmp_path, settings(extension=".svg", **kwargs))
     assert path.suffix == ".svg"
-    assert ET.parse(path).getroot().tag.endswith("svg")
+    return ET.parse(path).getroot()
+
+
+def children(root, tag):
+    return [el for el in root.iter() if el.tag.rpartition("}")[2] == tag]
+
+
+@pytest.mark.parametrize("box_style", core.SVG_DRAWERS)
+@pytest.mark.parametrize("eye_style", core.SVG_DRAWERS)
+def test_svg_styles(tmp_path, box_style, eye_style):
+    root = svg_root(tmp_path, box_style=box_style, eye_style=eye_style)
+    assert root.tag.endswith("svg")
+    assert len(children(root, "path")) == 1  # single path, no seams
+
+
+def test_svg_colors(tmp_path):
+    root = svg_root(tmp_path)
+    assert children(root, "rect")[0].get("fill") == "#ffff00"
+    assert children(root, "path")[0].get("fill") == "#000080"
+
+
+@pytest.mark.parametrize(
+    ("color_mask", "tag", "geometry"),
+    [
+        ("rgrad", "radialGradient", {"cx", "cy", "r"}),
+        ("hgrad", "linearGradient", {"x1", "x2"}),
+        ("vgrad", "linearGradient", {"y1", "y2"}),
+    ],
+)
+def test_svg_gradients(tmp_path, color_mask, tag, geometry):
+    root = svg_root(tmp_path, color_mask=color_mask, edge_color=(1, 2, 3))
+    (gradient,) = children(root, tag)
+    assert geometry <= set(gradient.attrib)
+    stops = [stop.get("stop-color") for stop in children(gradient, "stop")]
+    assert stops == ["#000080", "#010203"]
+    assert children(root, "path")[0].get("fill") == "url(#qr-gradient)"
+
+
+def test_svg_logo(tmp_path, logo):
+    root = svg_root(tmp_path, embedded_image_path=logo)
+    (image,) = children(root, "image")
+    href = image.get("{http://www.w3.org/1999/xlink}href")
+    assert href.startswith("data:image/png;base64,")
+    data = base64.b64decode(href.partition(",")[2])
+    with Image.open(io.BytesIO(data)) as embedded:
+        assert embedded.size == (60, 60)
+    assert float(image.get("width")) > 0
 
 
 # --- check_settings --------------------------------------------------
@@ -141,6 +232,14 @@ def test_svg(tmp_path):
         ({"error_correction": "X"}, "Unknown error correction"),
         ({"extension": ".jpg"}, "Unknown image extension"),
         ({"box_style": "triangle"}, "Unknown box style"),
+        ({"eye_style": "triangle"}, "Unknown eye style"),
+        (
+            {"extension": ".svg", "box_style": "vbars"},
+            "box style 'vbars' for SVG",
+        ),
+        ({"extension": ".svg", "eye_style": "rounded"}, "eye style"),
+        ({"extension": ".svg", "color_mask": "sgrad"}, "color mask"),
+        ({"extension": ".svg", "color_mask": "image"}, "color mask"),
         ({"color_mask": "plaid"}, "Unknown color mask"),
         ({"embedded_image_path": "missing.png"}, "Embedded image"),
         ({"color_mask": "image"}, "Image mask"),
@@ -159,10 +258,31 @@ def test_embedded_image_requires_h(logo):
         )
 
 
-def test_svg_ignores_png_only_options():
-    core.check_settings(
-        settings(extension=".svg", color_mask="image", error_correction="L")
-    )
+@pytest.mark.parametrize("ratio", [0.01, 0.6])
+def test_logo_size_out_of_range(logo, ratio):
+    with pytest.raises(ValueError, match="Logo size"):
+        core.check_settings(
+            settings(embedded_image_path=logo, logo_ratio=ratio)
+        )
+
+
+def test_embedded_file_must_be_an_image(tmp_path):
+    path = tmp_path / "notes.png"
+    path.write_text("not an image", encoding="utf-8")
+    with pytest.raises(ValueError, match="not an image"):
+        core.check_settings(settings(embedded_image_path=str(path)))
+
+
+@pytest.mark.parametrize("extension", core.FORMATS)
+def test_embedded_image_requires_h_for_both_formats(logo, extension):
+    with pytest.raises(ValueError, match="error correction H"):
+        core.check_settings(
+            settings(
+                extension=extension,
+                embedded_image_path=logo,
+                error_correction="Q",
+            )
+        )
 
 
 # --- make_preview ----------------------------------------------------
@@ -182,9 +302,9 @@ def test_preview_of_large_code_is_fast():
     assert time.perf_counter() - start < 5
 
 
-def test_preview_of_svg_is_black_and_white():
+def test_preview_of_svg_uses_its_colors():
     image = core.make_preview(settings(extension=".svg"), 300)
-    assert image.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+    assert image.convert("RGB").getpixel((0, 0)) == BACK
 
 
 def test_border_below_four_is_allowed(tmp_path):

@@ -27,10 +27,10 @@ PyQt5 is built on Qt 5, which is end-of-life.
 | `pillow` | `>=10.0` | imported directly (`PIL.ImageTk` for E1) |
 
 The code was verified on qrcode 8.2 + Pillow 12.3 (all box styles ×
-color masks, embedded image, SVG). Upgrading from 7.3.1 makes these
-available: `embedded_image_ratio`, passing a PIL image directly
-(`embedded_image=`), SVG module drawers (`SvgCircleDrawer`,
-`SvgPathImage`, `SvgFillImage`).
+color masks, embedded image, SVG). The qrcode 8 features are used since
+E5: `embedded_image_ratio`, passing a PIL image directly
+(`embedded_image=`), separate eye drawers, and the single-path SVG
+image with its circle/gapped drawers.
 
 ### D3 · Dependencies in `pyproject.toml` ✅
 
@@ -137,9 +137,10 @@ signatures. Both run through pre-commit.
 
 ## D · Quality
 
-- [x] **D5** pytest suite in `tests/` (139 tests):
-  - `core`: each style × mask, colors, embedded image, SVG, color
-    parsing, settings validation, previews.
+- [x] **D5** pytest suite in `tests/` (185 tests):
+  - `core`: each style × mask, eye styles, colors, logo size and
+    padding, SVG styles/colors/gradients/logo, color parsing, settings
+    validation, previews.
   - `presets`: JSON round-trip, names, broken files, platform folders,
     legacy conversion and import.
   - GUI behaviour with stubbed dialogs: saving, collisions,
@@ -170,8 +171,26 @@ signatures. Both run through pre-commit.
   an embedded image is used with a lower level. Ticking "Embed an
   image" now locks error correction to H (L/M/Q disabled), and
   unticking restores the previous level.
-- [ ] **E5** Expose the new qrcode 8 features: logo size ratio, styled
-  and colored SVG output.
+- [x] **E5** qrcode 8 features and styled SVG:
+  - Logo size (5–50 % of the width, default 25 %). Non-square logos
+    are padded with transparency instead of being stretched (qrcode
+    stretches them to a square).
+  - Eye style: the three finder patterns get their own style (qrcode 8
+    `eye_drawer`). The default is square, which matches the previous
+    output: qrcode always drew square eyes before.
+  - New "gapped circle" box style. qrcode only has it for SVG, so
+    `core.GappedCircleModuleDrawer` adds it for PNG.
+  - SVG (`aqrgen/svg.py`, `StyledSvgImage`): single-path output (no
+    seams between modules), square/gapped square/circle/gapped circle
+    styles, background and face colors, radial/horizontal/vertical
+    gradients matching the PNG masks, and embedded logos as base64 PNG
+    (scaled down to at most 1024 px). Square gradient, image mask,
+    rounded and bar styles stay PNG-only. SVGs now always have a
+    background; a transparent option could be added later.
+  - The preview renders SVG settings with the equivalent PNG options.
+  - The GUI replaces options SVG can't do and restores them when
+    switching back to PNG, unless another option was picked in the
+    meantime.
 - [x] **E6** Color fields accept `(r, g, b)` and `#rrggbb`, and the
   labels say so.
 - [x] **E7** Editable preset dropdown with Load / Save / Delete / Open
