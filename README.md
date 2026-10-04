@@ -17,20 +17,30 @@ The Python packages are installed automatically by the steps below.
 ## Installation
 
 ### For users
-The easiest way is [`pipx`](https://pipx.pypa.io) (or
-[`uv`](https://docs.astral.sh/uv/)). It installs the app into its own
-isolated environment and adds the `aqrgen` command, so you don't have
-to manage a virtual environment yourself:
+No git needed: pip downloads the code straight from GitHub and installs
+it together with its dependencies.
+
+Windows:
 
 ```bash
-pipx install git+https://github.com/GiovanniKl/advancedQrCodeGenerator.git
+py -m pip install --user https://github.com/GiovanniKl/advancedQrCodeGenerator/archive/refs/heads/main.zip
 ```
 
-or
+macOS / Linux:
 
 ```bash
-uv tool install git+https://github.com/GiovanniKl/advancedQrCodeGenerator.git
+python3 -m pip install --user https://github.com/GiovanniKl/advancedQrCodeGenerator/archive/refs/heads/main.zip
 ```
+
+To update, run the same command again.
+
+> [!TIP]
+> If you have [`pipx`](https://pipx.pypa.io), use
+> `pipx install <the URL above>` instead. It keeps the app in its own
+> isolated environment, so it can't clash with other Python packages.
+> On recent Linux distributions (Debian, Ubuntu, Fedora, …) plain
+> `pip install --user` is blocked with an "externally-managed-environment"
+> error. Use pipx there.
 
 ### From a clone (for development)
 ```bash
@@ -60,14 +70,19 @@ With `uv`, `uv sync` replaces the venv and pip steps (it creates `.venv`
 itself and installs the dev tools too).
 
 ## Usage
-Run
+Start the app with
 
 ```bash
-aqrgen
+py -m aqrgen
 ```
 
-or `python -m aqrgen`. Presets are saved as `.txt` files in a `presets/`
-folder in the directory you start the app from.
+(`python3 -m aqrgen` on macOS / Linux, `python -m aqrgen` inside an
+activated virtual environment). This always works. The shorter
+`aqrgen` command works too if pip's scripts folder is on your PATH
+(always the case with pipx or inside a virtual environment).
+
+Presets are saved as `.txt` files in a `presets/` folder in the
+directory you start the app from.
 
 *Further instructions might be added in the future...*
 

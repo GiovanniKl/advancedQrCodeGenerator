@@ -39,10 +39,11 @@ There is no `requirements.txt`. Runtime dependencies are in
 command in `[project.scripts]`.
 
 How users install it:
-- **Users:** `pipx install git+…` or `uv tool install git+…`. These
-  create a hidden isolated environment and put `aqrgen` on PATH, so
-  users never deal with a venv themselves. Later, a standalone `.exe`
-  (E9) can cover friends without Python.
+- **Users:** `py -m pip install --user <GitHub archive .zip URL>` (no
+  git needed; rerun to update), then `py -m aqrgen`. pipx with the same
+  URL is suggested for isolation, and is required on Linux distributions
+  that block `pip --user` (PEP 668). Later, a standalone `.exe` (E9) can
+  cover friends without Python.
 - **Developers:** clone, then `.venv` + `pip install -e . --group dev`,
   or just `uv sync`.
 
