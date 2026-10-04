@@ -13,7 +13,8 @@ from tkinter import colorchooser, filedialog, font, messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
-from aqrgen import __version__, clipboard, core, presets
+from aqrgen import __version__, clipboard, core, payloads, presets
+from aqrgen.insert_dialog import InsertDialog
 
 TITLE = "Advanced QR Code Generator"
 """Window and message box title."""
@@ -41,6 +42,9 @@ PAD = 5
 
 MIN_LONG_ENTRY_WIDTH = 20
 """Smallest width in characters of entries that fill their group."""
+
+MIN_MESSAGE_LINES = 3
+"""Height of the message box in lines when it is (nearly) empty."""
 
 IMAGE_FILETYPES = (
     ("Images", "*.png *.jpg *.jpeg *.gif *.bmp *.webp"),
@@ -207,6 +211,8 @@ class QrCodeGeneratorApp:
         self._preview_photo = None  # reference keeps the image alive
         self._saving = False
         self._closed = False
+        self._insert_values = {}  # last form values per message type
+        self.insert_dialog = None
 
         self._create_variables()
         root.title(f"{TITLE} by Jan Klíma")
@@ -228,6 +234,7 @@ class QrCodeGeneratorApp:
             for index, weight in enumerate((0, 0, 1))
         )
         columns.rowconfigure(0, weight=1)
+        self._left_column = left
         self._build_content(left)
         self._build_colors(left)
         self._build_styles(middle)
@@ -327,9 +334,7 @@ class QrCodeGeneratorApp:
             Left column of the window.
         """
         frame = _group(column, "Content")
-        self.message_entry = _labeled_entry(
-            frame, "Message/URL to encode:", self.message, None
-        )[1]
+        self._build_message(frame)
         _spinbox_row(
             frame,
             "Size standard (1–40, 1 = 21×21 boxes):",
@@ -354,6 +359,132 @@ class QrCodeGeneratorApp:
         _spinbox_row(
             frame, "Border (boxes, 4 recommended):", self.border, (0, 20, 1)
         )
+
+    def _build_message(self, frame):
+        """Build the multi-line message input and its Insert menu.
+
+        Parameters
+        ----------
+        frame : tkinter.ttk.Frame
+            Body of the Content group.
+        """
+        header = _add(frame, ttk.Frame(frame), sticky=tk.EW)
+        header.columnconfigure(0, weight=1)
+        _grid(ttk.Label(header, text="Message/URL to encode:"), 0, 0)
+        button = ttk.Menubutton(header, text="Insert…")
+        self.insert_menu = tk.Menu(button, tearoff=False)
+        for payload_type in payloads.PAYLOAD_TYPES:
+            self.insert_menu.add_command(
+                label=payload_type.title + "…",
+                command=lambda t=payload_type: self.open_insert_dialog(t),
+            )
+        button["menu"] = self.insert_menu
+        button.grid(column=1, row=0, sticky=tk.E)
+        button.tooltip = Tooltip(
+            button,
+            "Fill in the message from a form: Wi-Fi network, contact, "
+            "e-mail, SMS, phone call, WhatsApp, location, calendar event "
+            "or payment.",
+        )
+        line = _add(frame, ttk.Frame(frame), sticky=tk.EW)
+        line.columnconfigure(0, weight=1)
+        self.message_entry = tk.Text(
+            line,
+            width=MIN_LONG_ENTRY_WIDTH,
+            height=MIN_MESSAGE_LINES,
+            wrap="char",
+            undo=True,
+            font="TkDefaultFont",
+        )
+        self.message_entry.grid(column=0, row=0, sticky=tk.EW)
+        self._message_scrollbar = ttk.Scrollbar(
+            line, orient=tk.VERTICAL, command=self.message_entry.yview
+        )
+        self._message_scrollbar.grid(column=1, row=0, sticky=tk.NS)
+        self._message_scrollbar.grid_remove()  # shown when needed
+        self.message_entry.configure(yscrollcommand=self._message_scrollbar.set)
+        _link_text(self.message_entry, self.message)
+        # grow with the content, and use space the window gains
+        self.message.trace_add(
+            "write", lambda *_: self.root.after_idle(self._fit_message_height)
+        )
+        self._left_column.bind("<Configure>", self._fit_message_height)
+        # keep the shortcuts and Tab working inside the text box
+        for sequence, action in (
+            ("<Control-Return>", self.generate),
+            ("<Control-Shift-Return>", self.copy_to_clipboard),
+            ("<Tab>", lambda: self.message_entry.tk_focusNext().focus_set()),
+            (
+                "<Shift-Tab>",
+                lambda: self.message_entry.tk_focusPrev().focus_set(),
+            ),
+        ):
+            self.message_entry.bind(sequence, _instead_of_default(action))
+
+    def _fit_message_height(self, _event=None):
+        """Fit the message box to its content, as far as there is room.
+
+        The box grows by lines (wrapped lines included) until the left
+        column is as tall as the space it has, i.e. the tallest column;
+        beyond that a scrollbar appears.
+
+        Parameters
+        ----------
+        _event : tkinter.Event, optional
+            The ``<Configure>`` event of the left column (unused).
+        """
+        if self._closed:
+            return
+        text = self.message_entry
+        lines = _display_lines(text)
+        line_height = font.nametofont("TkDefaultFont").metrics("linespace")
+        current = int(text.cget("height"))
+        box_height = text.winfo_reqheight()
+        frame_height = box_height - current * line_height  # borders
+        room = self._left_column.winfo_height() - (
+            self._left_column.winfo_reqheight() - box_height
+        )
+        most = max(MIN_MESSAGE_LINES, (room - frame_height) // line_height)
+        height = max(MIN_MESSAGE_LINES, min(lines, most))
+        if height != current:
+            text.configure(height=height)
+        if lines > height:
+            self._message_scrollbar.grid()
+        else:
+            self._message_scrollbar.grid_remove()
+
+    def open_insert_dialog(self, payload_type):
+        """Open the form of a message type.
+
+        Parameters
+        ----------
+        payload_type : type
+            One of `aqrgen.payloads.PAYLOAD_TYPES`.
+        """
+        self.insert_dialog = InsertDialog(
+            self.root,
+            payload_type,
+            lambda text, values: self._insert_message(
+                payload_type, text, values
+            ),
+            self._insert_values.get(payload_type),
+        )
+
+    def _insert_message(self, payload_type, text, values):
+        """Put a message built by the Insert form into the message box.
+
+        Parameters
+        ----------
+        payload_type : type
+            The message type that was filled in.
+        text : str
+            The built message.
+        values : dict
+            Form values, remembered for the next use of the form.
+        """
+        self._insert_values[payload_type] = values
+        self.message.set(text)
+        self.message_entry.focus_set()
 
     def _build_colors(self, column):
         """Build the background, opacity and face color inputs.
@@ -1224,6 +1355,106 @@ def _column(parent, index, weight):
     frame.columnconfigure(0, weight=1)
     parent.columnconfigure(index, weight=weight)
     return frame
+
+
+def _link_text(text, var):
+    """Keep a multi-line Text widget and a StringVar in sync.
+
+    Parameters
+    ----------
+    text : tkinter.Text
+        The text widget.
+    var : tkinter.StringVar
+        Variable holding the same text.
+    """
+
+    def from_var(*_args):
+        """Show the variable's value in the widget if it differs.
+
+        Parameters
+        ----------
+        *_args
+            Trace callback arguments (unused).
+        """
+        if text.get("1.0", "end-1c") != var.get():
+            text.delete("1.0", "end")
+            text.insert("1.0", var.get())
+        text.edit_modified(False)
+
+    def from_text(_event):
+        """Store the widget's text in the variable after an edit.
+
+        Parameters
+        ----------
+        _event : tkinter.Event
+            The ``<<Modified>>`` event (unused).
+        """
+        if text.edit_modified():
+            value = text.get("1.0", "end-1c")
+            if value != var.get():
+                var.set(value)
+            text.edit_modified(False)
+
+    var.trace_add("write", from_var)
+    text.bind("<<Modified>>", from_text)
+    from_var()
+
+
+def _display_lines(text):
+    """Count the lines a Text widget shows, wrapped lines included.
+
+    Parameters
+    ----------
+    text : tkinter.Text
+        The text widget.
+
+    Returns
+    -------
+    int
+        Number of display lines, at least 1.
+    """
+    try:
+        result = text.count("1.0", "end-1c", "update", "displaylines")
+    except tk.TclError:
+        result = None
+    if isinstance(result, tuple):  # Python < 3.13 returns a tuple
+        result = result[0]
+    if result is None:  # widget not laid out yet: count text lines
+        return int(text.index("end-1c").split(".")[0])
+    return result + 1
+
+
+def _instead_of_default(action):
+    """Wrap an action as an event handler that stops default handling.
+
+    Parameters
+    ----------
+    action : callable
+        Called without arguments.
+
+    Returns
+    -------
+    callable
+        Event handler returning ``"break"``.
+    """
+
+    def handler(_event):
+        """Run the action and skip the widget's own handling.
+
+        Parameters
+        ----------
+        _event : tkinter.Event
+            The key event (unused).
+
+        Returns
+        -------
+        str
+            ``"break"``, which stops further handling of the event.
+        """
+        action()
+        return "break"
+
+    return handler
 
 
 def _next_row(frame):

@@ -88,6 +88,14 @@ activated virtual environment). This always works. The shorter
   preview shows what's wrong. Enlarge the window to enlarge the preview
   (up to twice its normal size).
 - **Browse…** buttons pick the save folder and image files.
+- **Insert…** (next to the message) fills in the message from a form
+  for a standard type that phones understand: Wi-Fi network (phones
+  join it), contact card, e-mail, SMS, phone call, WhatsApp message,
+  location, calendar event, Czech QR Platba or EU SEPA (EPC) payment.
+  Inputs like IBANs, account numbers, dates and phone numbers are
+  checked; a Czech account number (`19-2000145399/0800`) is converted
+  to an IBAN automatically. The message box grows with longer messages
+  and scrolls once it fills the column.
 - **Generate** (Ctrl+Enter) saves the QR code; generating runs in
   the background, so the window stays responsive.
 - **Copy PNG to clipboard** (Ctrl+Shift+Enter) copies the QR code as

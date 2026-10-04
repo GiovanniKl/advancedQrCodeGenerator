@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from aqrgen import clipboard, core, gui, presets
+from aqrgen import clipboard, core, gui, payloads, presets
 
 
 class Dialogs:
@@ -602,13 +602,15 @@ def enlarge(app, extra_width, extra_height, need=50):
     """Enlarge the window as far as the screen allows.
 
     CI screens are small: skip the test if the window can't grow by at
-    least ``need`` pixels in both directions.
+    least ``need`` pixels in each requested direction.
     """
     show(app)
     min_width, min_height = app.root.minsize()
     width = min(min_width + extra_width, app.root.winfo_screenwidth() - 20)
     height = min(min_height + extra_height, app.root.winfo_screenheight() - 80)
-    if width - min_width < need or height - min_height < need:
+    if (extra_width and width - min_width < need) or (
+        extra_height and height - min_height < need
+    ):
         pytest.skip("screen too small to enlarge the window")
     show(app, f"{width}x{height}+0+0")
 
@@ -754,3 +756,201 @@ def test_tooltip_appears_after_delay(app, monkeypatch):
     app.root.update()
     assert tip.window is not None
     tip.hide()
+
+
+# --- multi-line message and Insert forms -----------------------------
+
+
+SAMPLES = {
+    payloads.Wifi: {"ssid": "Home", "password": "secret"},
+    payloads.Contact: {"first_name": "Jan", "phone": "+420 123 456 789"},
+    payloads.Email: {"address": "a@b.cz", "body": "Hi\nthere"},
+    payloads.Sms: {"number": "+420 777 000 111", "text": "Hello"},
+    payloads.Phone: {"number": "+420 777 000 111"},
+    payloads.WhatsApp: {"number": "+420 777 000 111", "text": "Hi"},
+    payloads.Location: {"latitude": "49.1951", "longitude": "16.6068"},
+    payloads.Event: {
+        "summary": "Party",
+        "start_date": "4.10.2026",
+        "start_time": "18:00",
+    },
+    payloads.CzPayment: {"account": "19-2000145399/0800", "amount": "100"},
+    payloads.EuPayment: {"name": "A", "account": "DE89370400440532013000"},
+}
+
+
+def fill(dialog, values):
+    for name, value in values.items():
+        kind, widget, var = dialog.inputs[name]
+        if kind == "text":
+            widget.delete("1.0", "end")
+            widget.insert("1.0", value)
+        else:
+            var.set(value)
+
+
+def test_insert_menu_lists_all_types(app):
+    labels = [
+        app.insert_menu.entrycget(i, "label")
+        for i in range(app.insert_menu.index("end") + 1)
+    ]
+    assert labels == [t.title + "…" for t in payloads.PAYLOAD_TYPES]
+
+
+@pytest.mark.parametrize("payload_type", payloads.PAYLOAD_TYPES)
+def test_insert_each_type(app, dialogs, payload_type):
+    app.open_insert_dialog(payload_type)
+    dialog = app.insert_dialog
+    fill(dialog, SAMPLES[payload_type])
+    assert dialog.insert()
+    expected = payload_type(**SAMPLES[payload_type]).build()
+    assert app.message.get() == expected
+    assert app.message_entry.get("1.0", "end-1c") == expected
+    assert not dialog.window.winfo_exists()
+    wait_idle(app)
+    assert app._preview_photo is not None  # the message renders
+    assert dialogs.log == []
+
+
+def test_insert_invalid_keeps_dialog_open(app, dialogs):
+    app.message.set("old")
+    app.open_insert_dialog(payloads.Wifi)
+    fill(app.insert_dialog, {"ssid": "Home"})  # password missing
+    assert not app.insert_dialog.insert()
+    assert dialogs.kinds() == ["showwarning"]
+    assert "Password" in dialogs.last_message()
+    assert app.insert_dialog.window.winfo_exists()
+    assert app.message.get() == "old"
+    app.insert_dialog.close()
+
+
+def test_insert_remembers_values(app):
+    app.open_insert_dialog(payloads.Phone)
+    fill(app.insert_dialog, {"number": "+420 777 000 111"})
+    app.insert_dialog.insert()
+    app.open_insert_dialog(payloads.Phone)
+    assert app.insert_dialog.values() == {"number": "+420 777 000 111"}
+    app.insert_dialog.close()
+
+
+def test_insert_cancel_keeps_message(app):
+    app.message.set("keep me")
+    app.open_insert_dialog(payloads.Sms)
+    fill(app.insert_dialog, {"number": "123456"})
+    app.insert_dialog.close()
+    assert app.message.get() == "keep me"
+
+
+def test_enter_inserts_except_in_multiline_text(app):
+    app.open_insert_dialog(payloads.Sms)
+    dialog = app.insert_dialog
+    fill(dialog, {"number": "123456", "text": "Hi"})
+    text_widget = dialog.inputs["text"][1]
+    dialog._on_return(SimpleNamespace(widget=text_widget))
+    assert dialog.window.winfo_exists()  # Enter adds a line there
+    dialog._on_return(SimpleNamespace(widget=dialog.inputs["number"][1]))
+    assert not dialog.window.winfo_exists()
+    assert app.message.get() == "SMSTO:123456:Hi"
+
+
+def test_message_box_and_variable_stay_in_sync(app):
+    app.message.set("line 1\nline 2")
+    assert app.message_entry.get("1.0", "end-1c") == "line 1\nline 2"
+    app.message_entry.insert("end", "!")
+    app.root.update()
+    assert app.message.get() == "line 1\nline 2!"
+
+
+def test_shortcuts_work_inside_message_box(app, tmp_path, copied):
+    show(app)
+    app.message_entry.focus_force()
+    app.root.update()
+    app.message_entry.event_generate("<Control-Return>")
+    wait_idle(app)
+    assert (tmp_path / "qr.png").is_file()
+    app.message_entry.event_generate("<Control-Shift-Return>")
+    wait_idle(app)
+    assert len(copied) == 1
+    assert "\n" not in app.message.get()  # no new line was typed
+
+
+def test_preset_keeps_multiline_message(app):
+    app.message.set("BEGIN:VCARD\nVERSION:3.0\nFN:Jan\nEND:VCARD")
+    app.preset_name.set("card")
+    app.save_preset()
+    app.message.set("")
+    app.load_preset()
+    assert app.message_entry.get("1.0", "end-1c").count("\n") == 3
+
+
+def center(window):
+    return (
+        window.winfo_rootx() + window.winfo_width() // 2,
+        window.winfo_rooty() + window.winfo_height() // 2,
+    )
+
+
+@pytest.mark.parametrize("position", ["+40+40", "+300+150"])
+def test_insert_dialog_is_centered_on_main_window(app, position):
+    show(app, position)
+    app.open_insert_dialog(payloads.Contact)
+    dialog = app.insert_dialog.window
+    dialog.update()
+    (main_x, main_y), (dialog_x, dialog_y) = center(app.root), center(dialog)
+    # allow for the dialog's title bar and border
+    assert abs(dialog_x - main_x) <= 20
+    assert abs(dialog_y - main_y) <= 40
+    app.insert_dialog.close()
+
+
+# --- growing message box ---------------------------------------------
+
+
+def message_lines(app):
+    return int(app.message_entry.cget("height"))
+
+
+def scrollbar_shown(app):
+    return bool(app._message_scrollbar.winfo_ismapped())
+
+
+def set_message(app, text):
+    app.message.set(text)
+    wait_idle(app)
+
+
+def test_message_box_grows_with_content(app):
+    show(app)
+    assert message_lines(app) == gui.MIN_MESSAGE_LINES
+    set_message(app, "\n".join(f"line {i}" for i in range(8)))
+    assert message_lines(app) == 8
+    assert not scrollbar_shown(app)
+
+
+def test_message_box_counts_wrapped_lines(app):
+    show(app)
+    set_message(app, "x" * 400)  # one long line, wrapped in the box
+    assert message_lines(app) > gui.MIN_MESSAGE_LINES
+
+
+def test_message_box_stops_at_column_height_and_scrolls(app):
+    show(app)
+    size = (app.root.winfo_width(), app.root.winfo_height())
+    set_message(app, "\n".join(f"line {i}" for i in range(80)))
+    left = app._left_column
+    assert gui.MIN_MESSAGE_LINES < message_lines(app) < 80
+    assert left.winfo_reqheight() <= left.winfo_height()
+    assert scrollbar_shown(app)
+    assert (app.root.winfo_width(), app.root.winfo_height()) == size
+    set_message(app, "short")
+    assert message_lines(app) == gui.MIN_MESSAGE_LINES
+    assert not scrollbar_shown(app)
+
+
+def test_message_box_uses_space_of_larger_window(app):
+    set_message(app, "\n".join(f"line {i}" for i in range(80)))
+    show(app)
+    before = message_lines(app)
+    enlarge(app, 0, 300, need=100)
+    wait_idle(app)
+    assert message_lines(app) > before

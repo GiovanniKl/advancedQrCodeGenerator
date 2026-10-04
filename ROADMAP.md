@@ -152,7 +152,7 @@ signatures. Both run through pre-commit.
 
 ## D · Quality
 
-- [x] **D5** pytest suite in `tests/` (260 tests):
+- [x] **D5** pytest suite in `tests/` (343 tests):
   - `core`: each style × mask, eye styles, colors, logo size and
     padding, SVG styles/colors/gradients/logo, background opacity,
     color parsing, settings validation, previews.
@@ -226,6 +226,19 @@ signatures. Both run through pre-commit.
   fakes; `AQRGEN_TEST_CLIPBOARD=1` runs a real round trip on Windows.
 - [x] **E13** Tooltips on the error correction options explaining
   L/M/Q/H (and on the copy button).
+- [x] **E14** "Insert…" menu next to the message, opening a form for a
+  standard message type: Wi-Fi (`WIFI:`), contact (vCard 3.0), e-mail
+  (`mailto:`), SMS (`SMSTO:`), phone (`tel:`), WhatsApp (`wa.me` link),
+  location (Google Maps link or `geo:`), calendar event (iCalendar
+  `VEVENT`), Czech QR Platba (SPAYD, with Czech account number to IBAN
+  conversion and checksum checks) and EU SEPA payment (EPC/GiroCode).
+  Formats live in `aqrgen/payloads.py` (one dataclass per type, whose
+  fields also describe the form), the form in `aqrgen/insert_dialog.py`.
+  Forms remember their values during a session and open centered over
+  the main window. The message box is now multi-line (contacts and
+  events span several lines): it grows with its content (wrapped lines
+  included) until the left column is as tall as the tallest column,
+  then shows a scrollbar; a larger window gives it more room.
 
 ## F · Docs
 
