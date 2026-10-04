@@ -1,6 +1,8 @@
 """Tkinter GUI of the Advanced QR Code Generator."""
 
 import os
+import subprocess
+import sys
 import tkinter as tk
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -33,26 +35,26 @@ IMAGE_FILETYPES = (
 )
 """File type filter of the image file dialogs."""
 
-PRESET_KEYS = {
-    "mess": "message",
-    "savedir": "save_dir",
-    "picname": "file_name",
-    "collide": "on_collision",
-    "size": "version",
-    "errcor": "error_correction",
-    "ext": "extension",
-    "embim": "embed_image",
-    "embimp": "embedded_image_path",
-    "bgcolor": "back_color",
-    "fcolor": "front_color",
-    "boxsize": "box_size",
-    "bdsize": "border",
-    "boxstyle": "box_style",
-    "cmask": "color_mask",
-    "cmipath": "mask_image_path",
-    "color2": "edge_color",
-}
-"""Keys used in preset files mapped to the app's variable names."""
+PRESET_FIELDS = (
+    "message",
+    "save_dir",
+    "file_name",
+    "on_collision",
+    "version",
+    "error_correction",
+    "extension",
+    "embed_image",
+    "embedded_image_path",
+    "back_color",
+    "front_color",
+    "box_size",
+    "border",
+    "box_style",
+    "color_mask",
+    "mask_image_path",
+    "edge_color",
+)
+"""Names of the variables stored in presets."""
 
 ERROR_CORRECTION_OPTIONS = (
     ("L/low/7%", "L"),
@@ -116,13 +118,14 @@ class QrCodeGeneratorApp:
         self._build_preview(main)
 
         self._update_states()
-        for attr in PRESET_KEYS.values():
+        for attr in PRESET_FIELDS:
             if attr not in ("save_dir", "file_name", "on_collision"):
                 getattr(self, attr).trace_add(
                     "write", lambda *_: self._schedule_preview()
                 )
         self._schedule_preview()
         self.message_entry.focus()
+        root.after_idle(self._import_legacy_presets)
 
     # --- construction ------------------------------------------------
 
@@ -140,7 +143,7 @@ class QrCodeGeneratorApp:
         self.back_color = tk.StringVar(value="(255, 255, 255)")
         self.front_color = tk.StringVar(value="(0, 0, 0)")
         self.box_size = tk.IntVar(value=10)
-        self.border = tk.IntVar(value=5)
+        self.border = tk.IntVar(value=4)
         self.box_style = tk.StringVar(value="square")
         self.color_mask = tk.StringVar(value="solid")
         self.mask_image_path = tk.StringVar()
@@ -320,7 +323,7 @@ class QrCodeGeneratorApp:
         )
 
         frame = _section(main, column=4, row=4)
-        ttk.Label(frame, text="Border size (in boxes, min. is 4):").grid(
+        ttk.Label(frame, text="Border size (in boxes, 4 recommended):").grid(
             column=0, row=0, sticky=tk.W
         )
         ttk.Entry(frame, width=25, textvariable=self.border).grid(
@@ -432,7 +435,7 @@ class QrCodeGeneratorApp:
         ttk.Label(frame, textvariable=self.status).grid(column=0, row=1)
 
     def _build_presets_section(self, main):
-        """Build the preset name entry, its buttons and the preset list.
+        """Build the preset dropdown and its buttons.
 
         Parameters
         ----------
@@ -442,22 +445,22 @@ class QrCodeGeneratorApp:
         frame = ttk.Frame(main, padding=PAD)
         frame.grid(column=0, row=10, columnspan=5, sticky=tk.W)
         ttk.Label(frame, text="Presets:").grid(column=0, row=0, sticky=tk.W)
-        ttk.Entry(frame, width=20, textvariable=self.preset_name).grid(
-            column=1, row=0, sticky=tk.W
+        self.preset_combo = ttk.Combobox(
+            frame,
+            width=25,
+            textvariable=self.preset_name,
+            postcommand=self._reload_preset_list,
         )
+        self.preset_combo.grid(column=1, row=0, sticky=tk.W)
         for column, text, command in (
             (2, "Load", self.load_preset),
             (3, "Save", self.save_preset),
             (4, "Delete", self.delete_preset),
+            (5, "Open folder", self.open_presets_folder),
         ):
             ttk.Button(frame, text=text, command=command).grid(
                 column=column, row=0, sticky=tk.W, padx=(PAD, 0)
             )
-        ttk.Label(frame, text="List of available presets:").grid(
-            column=0, row=1, columnspan=4, sticky=tk.W
-        )
-        self.preset_list = tk.Text(frame, width=20)
-        self.preset_list.grid(column=0, row=2, columnspan=4, sticky=tk.W)
         self._reload_preset_list()
 
     def _build_preview(self, main):
@@ -844,25 +847,26 @@ class QrCodeGeneratorApp:
     # --- presets -----------------------------------------------------
 
     def load_preset(self):
-        """Load the preset named in the preset entry."""
+        """Load the preset named in the preset dropdown."""
+        name = self.preset_name.get()
         try:
-            values = presets.read_preset(self.preset_name.get())
+            values = presets.read_preset(name)
         except FileNotFoundError:
-            self._warn(
-                "Given preset file does not exist! Please check the name "
-                "carefully."
-            )
+            self._warn(f"There is no preset named {name!r}.")
+            return
+        except ValueError as err:
+            self._warn(str(err))
             return
         self._saved.clear()
         invalid = []
-        for key, attr in PRESET_KEYS.items():
-            if key not in values:
+        for attr in PRESET_FIELDS:
+            if attr not in values:
                 continue
             var = getattr(self, attr)
             try:
-                var.set(_convert_preset_value(var, values[key]))
-            except (KeyError, ValueError):
-                invalid.append(f"{key}={values[key]}")
+                var.set(_check_preset_value(var, values[attr]))
+            except ValueError:
+                invalid.append(f"{attr}: {values[attr]!r}")
         self._update_states()
         if invalid:
             self._warn(
@@ -871,57 +875,82 @@ class QrCodeGeneratorApp:
             )
         else:
             messagebox.showinfo(
-                f"Info - {TITLE}", "Presets loaded successfully!"
+                f"Info - {TITLE}", f"Preset {name!r} loaded successfully!"
             )
 
     def save_preset(self):
-        """Save the current settings under the name in the preset entry.
+        """Save the current settings under the name in the dropdown.
 
         Locked values are saved as they were before the lock.
         """
         name = self.preset_name.get()
-        if presets.preset_path(name).exists() and not messagebox.askyesno(
+        try:
+            exists = presets.preset_path(name).exists()
+        except ValueError as err:
+            self._warn(str(err))
+            return
+        if exists and not messagebox.askyesno(
             f"Overwrite - {TITLE}",
-            "Presets with this name already exist. Do you want to "
-            "overwrite them?",
+            f"Preset {name!r} already exists. Do you want to overwrite it?",
         ):
             return
         values = {}
-        for key, attr in PRESET_KEYS.items():
+        for attr in PRESET_FIELDS:
             var = getattr(self, attr)
             try:
-                values[key] = self._saved.get(str(var), var.get())
+                values[attr] = self._saved.get(str(var), var.get())
             except tk.TclError:  # e.g. text in a number entry
-                values[key] = self.root.getvar(str(var))
+                values[attr] = str(self.root.getvar(str(var)))
         presets.write_preset(name, values)
-        messagebox.showinfo(f"Info - {TITLE}", "Presets saved successfully!")
         self._reload_preset_list()
+        messagebox.showinfo(
+            f"Info - {TITLE}", f"Preset {name!r} saved successfully!"
+        )
 
     def delete_preset(self):
-        """Delete the preset named in the preset entry."""
+        """Delete the preset named in the preset dropdown."""
         name = self.preset_name.get()
-        title = f"Delete presets - {TITLE}"
-        if not presets.preset_path(name).exists():
-            messagebox.showinfo(
-                title, f"There are no presets with name {name}."
-            )
+        title = f"Delete preset - {TITLE}"
+        try:
+            exists = presets.preset_path(name).exists()
+        except ValueError as err:
+            self._warn(str(err))
+            return
+        if not exists:
+            messagebox.showinfo(title, f"There is no preset named {name!r}.")
             return
         if messagebox.askyesno(
-            title, f"Do you REALLY want to delete preset {name}?"
+            title, f"Do you REALLY want to delete preset {name!r}?"
         ):
             presets.delete_preset(name)
-            messagebox.showinfo(title, f"Presets {name} deleted successfully!")
+            self.preset_name.set("")
             self._reload_preset_list()
+            messagebox.showinfo(title, f"Preset {name!r} deleted.")
+
+    def open_presets_folder(self):
+        """Open the presets folder in the system's file manager."""
+        _open_in_file_manager(presets.ensure_presets_dir())
 
     def _reload_preset_list(self):
-        """Show the names of all saved presets in the preset list."""
-        names = presets.list_presets()
-        self.preset_list["state"] = "normal"
-        self.preset_list.delete("1.0", "end")
-        self.preset_list.config(height=len(names))
-        for name in names:
-            self.preset_list.insert("end", name + "\n")
-        self.preset_list["state"] = "disabled"
+        """Fill the preset dropdown with the names of all presets."""
+        self.preset_combo["values"] = presets.list_presets()
+
+    def _import_legacy_presets(self):
+        """Import old ``.txt`` presets and tell the user about it."""
+        try:
+            imported = presets.import_legacy_presets()
+        except OSError as err:
+            self._warn(f"Old presets could not be imported: {err}")
+            return
+        if imported:
+            self._reload_preset_list()
+            messagebox.showinfo(
+                f"Presets imported - {TITLE}",
+                f"Imported {len(imported)} preset(s) from the old "
+                f"'presets' folder:\n{', '.join(imported)}\n\nThey are "
+                f"now stored in:\n{presets.PRESETS_DIR}\n\nThe old files "
+                "were left untouched.",
+            )
 
     # --- shutdown ----------------------------------------------------
 
@@ -1076,33 +1105,53 @@ def _read_color(var, label):
         raise ValueError(f"{label} color: {err}") from None
 
 
-def _convert_preset_value(var, text):
-    """Convert a value from a preset file to the variable's type.
+def _check_preset_value(var, value):
+    """Check that a value from a preset fits the variable's type.
 
     Parameters
     ----------
     var : tkinter.Variable
         Variable the value is meant for.
-    text : str
-        Value as stored in the preset file.
+    value : object
+        Value as read from the preset file.
 
     Returns
     -------
     bool or int or str
-        The converted value.
+        The value, if it has the right type.
 
     Raises
     ------
-    KeyError
-        If a boolean is neither ``True`` nor ``False``.
     ValueError
-        If an integer is not a whole number.
+        If the value has the wrong type for the variable.
     """
     if isinstance(var, tk.BooleanVar):
-        return {"True": True, "False": False}[text]
-    if isinstance(var, tk.IntVar):
-        return int(text)
-    return text
+        expected = bool
+    elif isinstance(var, tk.IntVar):
+        expected = int
+    else:
+        expected = str
+    # bool is a subclass of int, so rule it out for numbers explicitly
+    if not isinstance(value, expected) or (
+        expected is int and isinstance(value, bool)
+    ):
+        raise ValueError(f"expected {expected.__name__}")
+    return value
+
+
+def _open_in_file_manager(path):
+    """Open a folder in the system's file manager.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Folder to open.
+    """
+    if sys.platform == "win32":
+        os.startfile(path)  # only exists on Windows
+    else:
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.Popen([opener, str(path)])
 
 
 def _render_and_save(settings, target):

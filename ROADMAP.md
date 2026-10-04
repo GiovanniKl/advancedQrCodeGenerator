@@ -93,11 +93,13 @@ signatures. Both run through pre-commit.
   uses are parsed.
 - [x] **B6** Deleting a preset now uses `Path.unlink()` instead of
   `os.system("del …")` (Windows-only, open to shell injection).
-- [ ] **B7** Presets and output paths depend on the current working
-  directory. Resolve them relative to a user config dir instead (only
-  `presets.PRESETS_DIR` needs to change).
+- [x] **B7** Presets live in a per-user folder (`%APPDATA%\aqrgen\presets`,
+  `~/Library/Application Support/aqrgen/presets`,
+  `$XDG_CONFIG_HOME` or `~/.config/aqrgen/presets`), independent of the
+  working directory. No new dependency.
 - [x] **B8** Inputs are validated with readable messages:
-  `core.check_settings` covers version 1–40, box size ≥ 1, border ≥ 4,
+  `core.check_settings` covers version 1–40, box size ≥ 1, border ≥ 0
+  (4 is the default and recommendation, smaller borders are allowed),
   missing image files and option names; the GUI covers non-numbers,
   missing save dir and empty file name. Unexpected errors show an error
   dialog with the traceback. `aqrgen` is now a `gui-scripts` entry
@@ -105,9 +107,12 @@ signatures. Both run through pre-commit.
 - [x] **B9** SVG now locks the box style to square and the color mask
   to solid fill (previous choices come back when switching to PNG), so
   there is nothing to warn about.
-- [~] **B10** Presets are now matched by variable name instead of line
-  position, so missing or extra lines no longer break loading. Still
-  to do: move to JSON, and keep a reader for the old `.txt` format.
+- [x] **B10** Presets are JSON, one `<name>.json` per preset, with
+  `format_version` and typed values (numbers, booleans), using the
+  GUI's variable names as keys. Old `.txt` presets in `./presets` are
+  imported once per folder on startup (existing JSON presets win, old
+  files stay untouched). Preset names are validated, so they can't
+  escape the folder or contain characters invalid in file names.
 - [x] **B11** The subtitle shows the real app and qrcode versions.
   The copy-pasted docstrings, the "Crtl" typo and
   `IntVar(value="10")` are fixed, and the unused
@@ -132,13 +137,16 @@ signatures. Both run through pre-commit.
 
 ## D · Quality
 
-- [x] **D5** pytest suite in `tests/` (117 tests):
+- [x] **D5** pytest suite in `tests/` (139 tests):
   - `core`: each style × mask, colors, embedded image, SVG, color
     parsing, settings validation, previews.
-  - `presets`: round-trip, legacy file format.
+  - `presets`: JSON round-trip, names, broken files, platform folders,
+    legacy conversion and import.
   - GUI behaviour with stubbed dialogs: saving, collisions,
-    validation, locks, file dialogs, preview, presets, error dialog.
-    These are skipped when Tk can't start (headless Linux).
+    validation, locks, file dialogs, preview, presets, legacy import,
+    error dialog. These are skipped when Tk can't start (headless
+    Linux). `tests/conftest.py` redirects the presets folder so tests
+    never touch the real one.
 - [x] **D6** GitHub Actions (`.github/workflows/ci.yml`):
   - pre-commit
   - pytest on Python 3.11–3.14 on Ubuntu, and 3.14 on Windows
@@ -166,8 +174,8 @@ signatures. Both run through pre-commit.
   and colored SVG output.
 - [x] **E6** Color fields accept `(r, g, b)` and `#rrggbb`, and the
   labels say so.
-- [ ] **E7** Presets as a dropdown or list box instead of a read-only
-  text widget.
+- [x] **E7** Editable preset dropdown with Load / Save / Delete / Open
+  folder buttons instead of the entry and the read-only text list.
 - [ ] **E8** Optional command-line mode (`aqrgen --preset foo "text"`)
   that reuses `core.py`.
 - [ ] **E9** A standalone `.exe` via PyInstaller on GitHub Releases.

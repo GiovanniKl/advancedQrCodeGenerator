@@ -91,8 +91,21 @@ activated virtual environment). This always works. The shorter
   square, black and white modules, so the style options are locked
   while SVG is selected.
 - Colors can be written as `(255, 128, 0)` or `#ff8000`.
-- Presets are saved as `.txt` files in a `presets/` folder in the
-  directory you start the app from.
+- **Presets** store all settings under a name: type a name in the
+  presets box and click **Save**; pick one from the dropdown and click
+  **Load**. **Open folder** shows where they are stored:
+
+  | OS | Presets folder |
+  |---|---|
+  | Windows | `%APPDATA%\aqrgen\presets` |
+  | macOS | `~/Library/Application Support/aqrgen/presets` |
+  | Linux | `~/.config/aqrgen/presets` (or `$XDG_CONFIG_HOME/aqrgen/presets`) |
+
+  Each preset is one `.json` file, so you can share a preset by sending
+  the file and dropping it into a friend's presets folder. Presets
+  from older versions (`.txt` files in a `presets` folder next to where
+  you started the app) are imported automatically on first start; the
+  old files are left untouched.
 
 *Further instructions might be added in the future...*
 

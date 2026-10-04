@@ -10,7 +10,7 @@ from tkinter import colorchooser, filedialog, messagebox
 import pytest
 from PIL import Image
 
-from aqrgen import core, gui
+from aqrgen import core, gui, presets
 
 
 class Dialogs:
@@ -43,20 +43,30 @@ def dialogs(monkeypatch):
 
 
 @pytest.fixture
-def app(tmp_path, monkeypatch, dialogs):
+def tk_root(tmp_path, monkeypatch, dialogs):
     monkeypatch.chdir(tmp_path)
     try:
         root = tkinter.Tk()
     except tkinter.TclError as err:
         pytest.skip(f"Tk not available: {err}")
     root.withdraw()
+    return root
+
+
+@pytest.fixture
+def app(tk_root, tmp_path):
+    app = make_app(tk_root, tmp_path)
+    yield app
+    wait_idle(app)
+    app.close()
+
+
+def make_app(root, tmp_path):
     app = gui.QrCodeGeneratorApp(root)
     app.message.set("hello")
     app.file_name.set("qr")
     app.save_dir.set(str(tmp_path))
-    yield app
-    wait_idle(app)
-    app.close()
+    return app
 
 
 @pytest.fixture
@@ -88,9 +98,9 @@ def state(widget):
 # --- startup and saving ----------------------------------------------
 
 
-def test_starts_without_presets_dir(app, tmp_path):
-    # B1: the app used to crash when presets/ was missing
-    assert (tmp_path / "presets").is_dir()
+def test_starts_without_presets_dir(app, presets_dir):
+    # B1: the app used to crash when the presets folder was missing
+    assert presets_dir.is_dir()
 
 
 def test_generates_png(app, dialogs, tmp_path):
@@ -178,7 +188,7 @@ def test_unexpected_error_shows_dialog(app, dialogs, monkeypatch):
         ("front_color", "__import__('os')", "Face color:"),  # B5
         ("box_size", "abc", "Box size must be a whole number"),
         ("version", "41", "Size standard must be from 1 to 40"),
-        ("border", "2", "Border size must be at least 4"),
+        ("border", "-1", "Border size must not be negative"),
     ],
 )
 def test_invalid_input_warns(app, dialogs, tmp_path, attr, value, message):
@@ -303,7 +313,7 @@ def test_preview_shows_errors_and_hints(app):
 
 
 def test_preview_does_not_open_dialogs(app, dialogs):
-    app.border.set(1)
+    app.border.set(-1)
     wait_idle(app)
     assert dialogs.log == []
 
@@ -311,15 +321,20 @@ def test_preview_does_not_open_dialogs(app, dialogs):
 # --- presets ---------------------------------------------------------
 
 
-def test_preset_round_trip(app, dialogs):
+def test_preset_round_trip(app, dialogs, presets_dir):
     app.preset_name.set("p")
     app.version.set(7)
+    app.embed_image.set(True)
     app.back_color.set("#ff0000")
     app.save_preset()
+    assert (presets_dir / "p.json").is_file()
+    assert app.preset_combo["values"] == ("p",)
     app.version.set(1)
+    app.embed_image.set(False)
     app.back_color.set("(0, 0, 0)")
     app.load_preset()
     assert app.version.get() == 7
+    assert app.embed_image.get() is True
     assert app.back_color.get() == "#ff0000"
     assert "showwarning" not in dialogs.kinds()
 
@@ -340,21 +355,65 @@ def test_preset_keeps_locked_values(app):
     assert app.box_style.get() == "circle"
 
 
-def test_preset_bad_value_warns(app, dialogs, tmp_path):
-    (tmp_path / "presets" / "bad.txt").write_text(
-        "size=__import__('os')\nembim=maybe\n", encoding="utf-8"
+def test_preset_wrong_types_warn(app, dialogs):
+    presets.write_preset(
+        "bad", {"version": "7", "embed_image": 1, "border": True}
     )
     app.preset_name.set("bad")
     app.load_preset()
     assert app.version.get() == 1
     assert dialogs.kinds() == ["showwarning"]
-    assert "size=" in dialogs.last_message()
-    assert "embim=" in dialogs.last_message()
+    for name in ("version", "embed_image", "border"):
+        assert name in dialogs.last_message()
 
 
-def test_delete_preset(app, tmp_path):
+@pytest.mark.parametrize(
+    ("name", "message"), [("", "enter a preset name"), ("a/b", "must not")]
+)
+def test_invalid_preset_name_warns(app, dialogs, name, message):
+    app.preset_name.set(name)
+    for action in (app.save_preset, app.load_preset, app.delete_preset):
+        action()
+        assert dialogs.kinds()[-1] == "showwarning"
+        assert message in dialogs.last_message()
+
+
+def test_broken_preset_file_warns(app, dialogs, presets_dir):
+    (presets_dir / "broken.json").write_text("{", encoding="utf-8")
+    app.preset_name.set("broken")
+    app.load_preset()
+    assert "not valid JSON" in dialogs.last_message()
+
+
+def test_delete_preset(app, presets_dir):
     app.preset_name.set("p")
     app.save_preset()
     app.delete_preset()
-    assert not (tmp_path / "presets" / "p.txt").exists()
-    assert app.preset_list.get("1.0", "end").strip() == ""
+    assert not (presets_dir / "p.json").exists()
+    assert app.preset_combo["values"] in ("", ())
+    assert app.preset_name.get() == ""
+
+
+def test_open_presets_folder(app, monkeypatch, presets_dir):
+    opened = []
+    monkeypatch.setattr(gui, "_open_in_file_manager", opened.append)
+    app.open_presets_folder()
+    assert opened == [presets_dir]
+
+
+def test_imports_legacy_presets_on_start(tk_root, tmp_path, dialogs):
+    legacy = tmp_path / "presets"
+    legacy.mkdir()
+    (legacy / "old.txt").write_text("mess=hi\nsize=3\n", encoding="utf-8")
+    app = make_app(tk_root, tmp_path)
+    try:
+        wait_idle(app)
+        assert dialogs.kinds() == ["showinfo"]
+        assert "old" in dialogs.last_message()
+        assert app.preset_combo["values"] == ("old",)
+        app.preset_name.set("old")
+        app.load_preset()
+        assert (app.message.get(), app.version.get()) == ("hi", 3)
+    finally:
+        wait_idle(app)
+        app.close()

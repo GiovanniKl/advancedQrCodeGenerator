@@ -66,8 +66,9 @@ class QrSettings:
         white; all styling options below are ignored for SVG.
     box_size : int, default 10
         Pixels per module (box).
-    border : int, default 5
-        Border width in modules. The QR standard requires at least 4.
+    border : int, default 4
+        Border width in modules. The QR standard recommends at least 4;
+        smaller borders are allowed, e.g. for cropping.
     box_style : str, default "square"
         Key of `MODULE_DRAWERS`.
     color_mask : str, default "solid"
@@ -90,7 +91,7 @@ class QrSettings:
     error_correction: str = "M"
     extension: str = ".png"
     box_size: int = 10
-    border: int = 5
+    border: int = 4
     box_style: str = "square"
     color_mask: str = "solid"
     back_color: Color = (255, 255, 255)
@@ -118,8 +119,8 @@ def check_settings(settings):
         raise ValueError("Size standard must be from 1 to 40.")
     if settings.box_size < 1:
         raise ValueError("Box size must be at least 1 pixel.")
-    if settings.border < 4:
-        raise ValueError("Border size must be at least 4 boxes.")
+    if settings.border < 0:
+        raise ValueError("Border size must not be negative.")
     for value, options, name in (
         (settings.error_correction, ERROR_CORRECTIONS, "error correction"),
         (settings.extension, FORMATS, "image extension"),

@@ -137,7 +137,7 @@ def test_svg(tmp_path):
         ({"version": 0}, "Size standard"),
         ({"version": 41}, "Size standard"),
         ({"box_size": 0}, "Box size"),
-        ({"border": 3}, "Border size"),
+        ({"border": -1}, "Border size"),
         ({"error_correction": "X"}, "Unknown error correction"),
         ({"extension": ".jpg"}, "Unknown image extension"),
         ({"box_style": "triangle"}, "Unknown box style"),
@@ -187,9 +187,15 @@ def test_preview_of_svg_is_black_and_white():
     assert image.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
 
 
+def test_border_below_four_is_allowed(tmp_path):
+    path = render(tmp_path, settings(border=0))
+    with Image.open(path) as img:
+        assert img.size == (21 * BOX, 21 * BOX)
+
+
 def test_preview_validates():
     with pytest.raises(ValueError, match="Border size"):
-        core.make_preview(settings(border=0), 300)
+        core.make_preview(settings(border=-1), 300)
 
 
 def test_output_path(tmp_path):
