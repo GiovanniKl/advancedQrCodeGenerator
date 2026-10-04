@@ -81,8 +81,12 @@ activated virtual environment). This always works. The shorter
 `aqrgen` command works too if pip's scripts folder is on your PATH
 (always the case with pipx or inside a virtual environment).
 
-- The **preview** on the right updates as you type. If an input is
-  invalid, the preview shows what's wrong.
+- The window has three columns: content, dimensions and colors on
+  the left; styles, color mask and logo in the middle; the preview and
+  the save options on the right. Presets are at the top.
+- The **preview** updates as you type. If an input is invalid, the
+  preview shows what's wrong. Enlarge the window to enlarge the preview
+  (up to twice its normal size).
 - **Browse…** buttons pick the save folder and image files.
 - **Generate** (or Ctrl+Enter) saves the QR code; generating runs in
   the background, so the window stays responsive.

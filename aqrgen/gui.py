@@ -8,7 +8,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version as package_version
 from pathlib import Path
-from tkinter import colorchooser, filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, font, messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
@@ -18,7 +18,10 @@ TITLE = "Advanced QR Code Generator"
 """Window and message box title."""
 
 PREVIEW_SIZE = 300
-"""Width and height of the preview in pixels."""
+"""Smallest width and height of the preview in pixels."""
+
+MAX_PREVIEW_SIZE = 2 * PREVIEW_SIZE
+"""Largest preview size, reached when the window is enlarged."""
 
 PREVIEW_DELAY_MS = 300
 """Delay after the last change before the preview is redrawn."""
@@ -27,7 +30,10 @@ POLL_MS = 50
 """Interval for checking whether background work has finished."""
 
 PAD = 5
-"""Padding around each section."""
+"""Basic padding between widgets in pixels."""
+
+MIN_LONG_ENTRY_WIDTH = 20
+"""Smallest width in characters of entries that fill their group."""
 
 IMAGE_FILETYPES = (
     ("Images", "*.png *.jpg *.jpeg *.gif *.bmp *.webp"),
@@ -60,10 +66,10 @@ PRESET_FIELDS = (
 """Names of the variables stored in presets."""
 
 ERROR_CORRECTION_OPTIONS = (
-    ("L/low/7%", "L"),
-    ("M/medium/15%", "M"),
-    ("Q/quite-high/25%", "Q"),
-    ("H/high/30%", "H"),
+    ("L · 7 %", "L"),
+    ("M · 15 %", "M"),
+    ("Q · 25 %", "Q"),
+    ("H · 30 %", "H"),
 )
 BOX_STYLE_OPTIONS = (
     ("Square", "square"),
@@ -74,6 +80,8 @@ BOX_STYLE_OPTIONS = (
     ("Vertical bars", "vbars"),
     ("Horizontal bars", "hbars"),
 )
+STYLE_LAYOUT = ((0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (0, 2), (1, 2))
+"""Grid positions of the style buttons: squares, circles, bars."""
 COLOR_MASK_OPTIONS = (
     ("Solid fill", "solid"),
     ("Radial gradient", "rgrad"),
@@ -112,16 +120,23 @@ class QrCodeGeneratorApp:
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<Control-Return>", lambda _event: self.generate())
 
-        main = ttk.Frame(root, padding="5 5 5 10")
-        main.grid(column=0, row=0)
-        self._build_heading(main)
-        self._build_output_section(main)
-        self._build_code_section(main)
-        self._build_color_section(main)
-        self._build_style_section(main)
-        self._build_generate_section(main)
-        self._build_presets_section(main)
-        self._build_preview(main)
+        self._build_header(root)
+        columns = ttk.Frame(root, padding=(PAD, 0, PAD, 2 * PAD))
+        columns.grid(column=0, row=1, sticky=tk.NSEW)
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(1, weight=1)
+        # only the right column (preview) takes extra space
+        left, middle, right = (
+            _column(columns, index, weight)
+            for index, weight in enumerate((0, 0, 1))
+        )
+        columns.rowconfigure(0, weight=1)
+        self._build_content(left)
+        self._build_colors(left)
+        self._build_styles(middle)
+        self._build_logo(middle)
+        self._build_preview(right)
+        self._build_save(right)
 
         self._update_states()
         for attr in PRESET_FIELDS:
@@ -131,6 +146,11 @@ class QrCodeGeneratorApp:
                 )
         self._schedule_preview()
         self.message_entry.focus()
+        root.update_idletasks()
+        for column in (left, middle, right):
+            _fit_groups_to_column(column)
+        root.update_idletasks()
+        root.minsize(root.winfo_reqwidth(), root.winfo_reqheight())
         root.after_idle(self._import_legacy_presets)
 
     # --- construction ------------------------------------------------
@@ -160,290 +180,301 @@ class QrCodeGeneratorApp:
         self.preset_name = tk.StringVar()
         self.status = tk.StringVar()
 
-    def _build_heading(self, main):
-        """Build the title and the version line.
+    def _build_header(self, root):
+        """Build the title, the version line and the preset bar.
 
         Parameters
         ----------
-        main : tkinter.ttk.Frame
-            Main frame of the window.
+        root : tkinter.Tk
+            Root window.
         """
-        frame = ttk.Frame(main, padding=PAD)
-        frame.grid(column=0, row=0, columnspan=9)
-        ttk.Label(
-            frame, text=f"{TITLE} by Jan Klíma", font=("Courier", 20, "bold")
-        ).grid(column=0, row=0)
+        frame = ttk.Frame(root, padding=(2 * PAD, PAD))
+        frame.grid(column=0, row=0, sticky=tk.EW)
+        frame.columnconfigure(1, weight=1)
+        ttk.Label(frame, text=TITLE, font=("Courier", 18, "bold")).grid(
+            column=0, row=0, sticky=tk.W
+        )
         ttk.Label(
             frame,
-            text=f"Version {__version__}, using qrcode "
-            f"{package_version('qrcode')}.",
-            font=("Courier", 12),
+            text=f"by Jan Klíma · version {__version__} · qrcode "
+            f"{package_version('qrcode')}",
+            font=("Courier", 10),
         ).grid(column=0, row=1, sticky=tk.W)
+        bar = ttk.Frame(frame)
+        bar.grid(column=2, row=0, rowspan=2, sticky=tk.E)
+        ttk.Label(bar, text="Preset:").grid(column=0, row=0)
+        self.preset_combo = ttk.Combobox(
+            bar,
+            width=25,
+            textvariable=self.preset_name,
+            postcommand=self._reload_preset_list,
+        )
+        self.preset_combo.grid(column=1, row=0, padx=PAD)
+        for column, text, command in (
+            (2, "Load", self.load_preset),
+            (3, "Save", self.save_preset),
+            (4, "Delete", self.delete_preset),
+            (5, "Open folder", self.open_presets_folder),
+        ):
+            ttk.Button(bar, text=text, command=command).grid(
+                column=column, row=0, padx=(0, PAD)
+            )
+        self._reload_preset_list()
 
-    def _build_output_section(self, main):
-        """Build the message, save location and file name inputs.
+    def _build_content(self, column):
+        """Build the message, size standard and error correction inputs.
 
         Parameters
         ----------
-        main : tkinter.ttk.Frame
-            Main frame of the window.
+        column : tkinter.ttk.Frame
+            Left column of the window.
         """
-        frame = _section(main, column=0, row=1)
-        ttk.Label(frame, text="Message/URL to encode:").grid(
-            column=0, row=0, sticky=tk.W
-        )
-        self.message_entry = ttk.Entry(
-            frame, width=50, textvariable=self.message
-        )
-        self.message_entry.grid(column=0, row=1, sticky=tk.W)
-
-        frame = _section(main, column=0, row=2)
-        ttk.Label(frame, text="Location to save the QR code at:").grid(
-            column=0, row=0, sticky=tk.W
-        )
-        ttk.Entry(frame, width=50, textvariable=self.save_dir).grid(
-            column=0, row=1, sticky=tk.W
-        )
-        ttk.Button(frame, text="Browse…", command=self._browse_save_dir).grid(
-            column=1, row=1, sticky=tk.W, padx=PAD
-        )
-
-        frame = _section(main, column=0, row=3)
-        ttk.Label(frame, text="QR code name:").grid(
-            column=0, row=0, sticky=tk.W
-        )
-        ttk.Label(frame, text="On collision:").grid(
-            column=1, row=0, sticky=tk.E
-        )
-        collision = ttk.Combobox(
+        frame = _group(column, "Content")
+        self.message_entry = _labeled_entry(
+            frame, "Message/URL to encode:", self.message, None
+        )[1]
+        _spinbox_row(
             frame,
-            textvariable=self.on_collision,
-            width=14,
-            values=("ask", "overwrite", "warn & abort"),
+            "Size standard (1–40, 1 = 21×21 boxes):",
+            self.version,
+            (1, 40, 1),
         )
-        collision.state(["readonly"])
-        collision.grid(column=2, row=0, sticky=tk.E)
-        ttk.Entry(frame, width=50, textvariable=self.file_name).grid(
-            column=0, row=1, sticky=tk.W, columnspan=3
+        _add(
+            frame,
+            ttk.Label(frame, text="Error correction (can recover):"),
+            pady=(PAD, 0),
+        )
+        self._error_correction_buttons = _radio_group(
+            frame, self.error_correction, ERROR_CORRECTION_OPTIONS, 4
         )
 
-    def _build_code_section(self, main):
-        """Build the size, error correction, format and logo inputs.
+        frame = _group(column, "Dimensions")
+        _spinbox_row(
+            frame, "Box size (pixels per box):", self.box_size, (1, 100, 1)
+        )
+        _spinbox_row(
+            frame, "Border (boxes, 4 recommended):", self.border, (0, 20, 1)
+        )
+
+    def _build_colors(self, column):
+        """Build the background, opacity and face color inputs.
 
         Parameters
         ----------
-        main : tkinter.ttk.Frame
-            Main frame of the window.
+        column : tkinter.ttk.Frame
+            Left column of the window.
         """
-        frame = _section(main, column=0, row=4)
-        ttk.Label(frame, text="Size standard from 1 to 40 (1 ~ 21x21):").grid(
-            column=0, row=0, sticky=tk.W
+        frame = _group(column, "Colors")
+        self._color_input(
+            frame,
+            "Background, e.g. (255, 255, 255) or #ffffff:",
+            self.back_color,
         )
-        ttk.Entry(frame, width=25, textvariable=self.version).grid(
-            column=0, row=1, sticky=tk.W
+        _spinbox_row(
+            frame,
+            "Background opacity (%, 0 = transparent):",
+            self.back_opacity,
+            (0, 100, 10),
+        )
+        self._face_widgets = self._color_input(
+            frame, "Face, e.g. (0, 0, 0) or #000000:", self.front_color
         )
 
-        frame = _section(main, column=0, row=5)
-        ttk.Label(
-            frame, text="Error correction standard/quality/can recover:"
-        ).grid(column=0, row=0, columnspan=2, sticky=tk.W)
-        self._error_correction_buttons = _radio_group(
-            frame, self.error_correction, ERROR_CORRECTION_OPTIONS, columns=2
+    def _build_styles(self, column):
+        """Build the box style, eye style and color mask inputs.
+
+        Parameters
+        ----------
+        column : tkinter.ttk.Frame
+            Middle column of the window.
+        """
+        styles = _radio_group(
+            _group(column, "Box style"),
+            self.box_style,
+            BOX_STYLE_OPTIONS,
+            STYLE_LAYOUT,
+            self._update_states,
+        )
+        eyes = _radio_group(
+            _group(column, "Eye style (the 3 corner squares)"),
+            self.eye_style,
+            BOX_STYLE_OPTIONS,
+            STYLE_LAYOUT,
+            self._update_states,
+        )
+        frame = _group(column, "Color mask")
+        masks = _radio_group(
+            frame, self.color_mask, COLOR_MASK_OPTIONS, 3, self._update_states
+        )
+        edge = _add(frame, ttk.Frame(frame), pady=(PAD, 0))
+        self._edge_widgets = [
+            _grid(ttk.Label(edge, text="2nd color:"), 0, 0),
+            _grid(
+                ttk.Entry(edge, width=16, textvariable=self.edge_color),
+                1,
+                0,
+                padx=PAD,
+            ),
+            _grid(
+                ttk.Button(
+                    edge,
+                    text="Palette…",
+                    command=lambda: self._pick_color(self.edge_color),
+                ),
+                2,
+                0,
+            ),
+        ]
+        self._mask_image_widgets = _labeled_entry(
+            frame,
+            "Image mask path:",
+            self.mask_image_path,
+            None,
+            (
+                "Browse…",
+                lambda: self._browse_image(self.mask_image_path, "Image mask"),
+            ),
+        )
+        self._style_buttons, self._eye_buttons = styles, eyes
+        self._mask_buttons = masks
+        self._png_only_widgets = [
+            button
+            for buttons, allowed in (
+                (styles, core.SVG_DRAWERS),
+                (eyes, core.SVG_DRAWERS),
+                (masks, core.SVG_GRADIENTS),
+            )
+            for value, button in buttons.items()
+            if value not in allowed
+        ]
+
+    def _build_logo(self, column):
+        """Build the embedded image inputs.
+
+        Parameters
+        ----------
+        column : tkinter.ttk.Frame
+            Middle column of the window.
+        """
+        frame = _group(column, "Logo")
+        _add(
+            frame,
+            ttk.Checkbutton(
+                frame,
+                text="Embed an image in the center (uses error correction H)",
+                variable=self.embed_image,
+                command=self._update_states,
+            ),
+        )
+        self._embed_widgets = _labeled_entry(
+            frame,
+            "Image path:",
+            self.embedded_image_path,
+            None,
+            (
+                "Browse…",
+                lambda: self._browse_image(
+                    self.embedded_image_path, "Image to embed"
+                ),
+            ),
+        ) + _spinbox_row(
+            frame,
+            "Logo size (% of width, 25 recommended):",
+            self.logo_size,
+            (5, 50, 5),
         )
 
-        frame = _section(main, column=0, row=6)
-        ttk.Label(frame, text="Image extension:").grid(
-            column=0, row=0, columnspan=2, sticky=tk.W
+    def _build_preview(self, column):
+        """Build the preview area, which grows with the window.
+
+        Parameters
+        ----------
+        column : tkinter.ttk.Frame
+            Right column of the window.
+        """
+        frame = _group(column, "Preview")
+        self._preview_column = column
+        self._preview_size = PREVIEW_SIZE
+        self._preview_box = ttk.Frame(
+            frame,
+            width=PREVIEW_SIZE + 4,
+            height=PREVIEW_SIZE + 4,
+            relief="sunken",
+            borderwidth=2,
         )
+        _add(frame, self._preview_box)
+        self._preview_box.grid_propagate(False)
+        self._preview_box.columnconfigure(0, weight=1)
+        self._preview_box.rowconfigure(0, weight=1)
+        self.preview_label = ttk.Label(
+            self._preview_box,
+            anchor=tk.CENTER,
+            justify=tk.CENTER,
+            wraplength=PREVIEW_SIZE,
+        )
+        self.preview_label.grid(column=0, row=0)
+        column.bind("<Configure>", self._on_preview_area_resized)
+
+    def _build_save(self, column):
+        """Build the format, folder and name inputs and Generate.
+
+        Parameters
+        ----------
+        column : tkinter.ttk.Frame
+            Right column of the window.
+        """
+        frame = _group(column, "Save")
+        _add(frame, ttk.Label(frame, text="Format:"))
         _radio_group(
             frame,
             self.extension,
             (("PNG", ".png"), ("SVG (fewer styles and color masks)", ".svg")),
-            columns=2,
-            command=self._update_states,
+            2,
+            self._update_states,
         )
-
-        frame = _section(main, column=0, row=7)
-        embed_check = ttk.Checkbutton(
+        self._save_dir_widgets = _labeled_entry(
             frame,
-            text="Embed an image in the center (uses error correction H).",
-            variable=self.embed_image,
-            command=self._update_states,
+            "Folder:",
+            self.save_dir,
+            None,
+            ("Browse…", self._browse_save_dir),
         )
-        embed_check.grid(column=0, row=0, sticky=tk.W, columnspan=3)
-        self._embed_widgets = (
-            _grid(ttk.Label(frame, text="   Path:"), 0, 1),
-            _grid(
-                ttk.Entry(
-                    frame, width=40, textvariable=self.embedded_image_path
-                ),
-                1,
-                1,
-            ),
-            _grid(
-                ttk.Button(
-                    frame,
-                    text="Browse…",
-                    command=lambda: self._browse_image(
-                        self.embedded_image_path, "Image to embed"
-                    ),
-                ),
-                2,
-                1,
-                padx=PAD,
-            ),
-            _grid(
-                ttk.Label(
-                    frame, text="   Logo size (% of width, 25 recommended):"
-                ),
-                0,
-                2,
-                columnspan=2,
-            ),
-            _grid(
-                ttk.Spinbox(
-                    frame,
-                    from_=5,
-                    to=50,
-                    increment=5,
-                    width=6,
-                    textvariable=self.logo_size,
-                ),
-                2,
-                2,
-                padx=PAD,
-            ),
+        name = _add(frame, ttk.Frame(frame), pady=(PAD, 0))
+        _grid(ttk.Label(name, text="Name:"), 0, 0)
+        _grid(
+            ttk.Entry(name, width=18, textvariable=self.file_name),
+            1,
+            0,
+            padx=PAD,
         )
-
-    def _build_color_section(self, main):
-        """Build the background and face color inputs.
-
-        Parameters
-        ----------
-        main : tkinter.ttk.Frame
-            Main frame of the window.
-        """
-        for row, label, var, example in (
-            (1, "Background", self.back_color, "(255, 255, 255) or #ffffff"),
-            (2, "Face", self.front_color, "(0, 0, 0) or #000000"),
-        ):
-            frame = _section(main, column=4, row=row)
-            self._color_input(
-                frame, f"{label} color, e.g. {example}:", var, width=30
-            )
-            if var is self.back_color:
-                opacity = ttk.Frame(frame)
-                opacity.grid(column=0, row=2, columnspan=2, sticky=tk.W)
-                ttk.Label(
-                    opacity, text="Background opacity (%, 0 = transparent):"
-                ).grid(column=0, row=0, sticky=tk.W)
-                ttk.Spinbox(
-                    opacity,
-                    from_=0,
-                    to=100,
-                    increment=10,
-                    width=6,
-                    textvariable=self.back_opacity,
-                ).grid(column=1, row=0, sticky=tk.W, padx=PAD)
-
-    def _build_style_section(self, main):
-        """Build the box size, border, box style and color mask inputs.
-
-        Parameters
-        ----------
-        main : tkinter.ttk.Frame
-            Main frame of the window.
-        """
-        frame = _section(main, column=4, row=3)
-        ttk.Label(
-            frame, text="Box size (pixels per each 'box' in the QR code):"
-        ).grid(column=0, row=0, sticky=tk.W)
-        ttk.Entry(frame, width=25, textvariable=self.box_size).grid(
-            column=0, row=1, sticky=tk.W
+        _grid(ttk.Label(name, text="If it exists:"), 2, 0)
+        collision = ttk.Combobox(
+            name,
+            textvariable=self.on_collision,
+            width=12,
+            values=("ask", "overwrite", "warn & abort"),
         )
-
-        frame = _section(main, column=4, row=4)
-        ttk.Label(frame, text="Border size (in boxes, 4 recommended):").grid(
-            column=0, row=0, sticky=tk.W
-        )
-        ttk.Entry(frame, width=25, textvariable=self.border).grid(
-            column=0, row=1, sticky=tk.W
-        )
-
-        frame = _section(main, column=4, row=5)
-        ttk.Label(frame, text="Box style:").grid(
-            column=0, row=0, sticky=tk.W, columnspan=3
-        )
-        styles = _radio_group(
+        collision.state(["readonly"])
+        _grid(collision, 3, 0, padx=(PAD, 0))
+        self.generate_button = _add(
             frame,
-            self.box_style,
-            BOX_STYLE_OPTIONS,
-            columns=3,
-            command=self._update_states,
-        )
-        eye_frame = ttk.Frame(frame)
-        eye_frame.grid(column=0, row=4, sticky=tk.W, columnspan=3)
-        ttk.Label(eye_frame, text="Eye style (the 3 corner squares):").grid(
-            column=0, row=0, sticky=tk.W
-        )
-        self.eye_combo = ttk.Combobox(eye_frame, width=16)
-        self.eye_combo.state(["readonly"])
-        self.eye_combo.grid(column=1, row=0, sticky=tk.W, padx=PAD)
-        self.eye_combo.bind("<<ComboboxSelected>>", self._on_eye_selected)
-        self.eye_style.trace_add("write", lambda *_: self._show_eye_style())
-        self._show_eye_style()
-
-        frame = _section(main, column=4, row=6, rowspan=2)
-        ttk.Label(frame, text="Color mask:").grid(
-            column=0, row=0, sticky=tk.W, columnspan=3
-        )
-        masks = _radio_group(
-            frame,
-            self.color_mask,
-            COLOR_MASK_OPTIONS,
-            columns=3,
-            command=self._update_states,
-        )
-        mask_frame = ttk.Frame(frame)
-        mask_frame.grid(column=0, row=3, sticky=tk.W, columnspan=3)
-        self._mask_image_widgets = (
-            _grid(ttk.Label(mask_frame, text="Image mask path:"), 0, 0),
-            _grid(
-                ttk.Entry(
-                    mask_frame, width=40, textvariable=self.mask_image_path
-                ),
-                1,
-                0,
+            ttk.Button(
+                frame,
+                text="Generate QR code (Ctrl+Enter)",
+                command=self.generate,
             ),
-            _grid(
-                ttk.Button(
-                    mask_frame,
-                    text="Browse…",
-                    command=lambda: self._browse_image(
-                        self.mask_image_path, "Image mask"
-                    ),
-                ),
-                2,
-                0,
-                padx=PAD,
-            ),
+            sticky="",
+            pady=(2 * PAD, 0),
+            ipadx=10,
+            ipady=5,
         )
-        edge_frame = ttk.Frame(frame)
-        edge_frame.grid(column=0, row=4, sticky=tk.W, columnspan=3)
-        self._edge_widgets = self._color_input(
-            edge_frame, "2nd color, e.g. (0, 0, 255):", self.edge_color, 15
-        )
-        self._png_only_widgets = [
-            button
-            for value, button in styles.items()
-            if value not in core.SVG_DRAWERS
-        ] + [
-            button
-            for value, button in masks.items()
-            if value not in core.SVG_GRADIENTS
-        ]
+        _add(frame, ttk.Label(frame, textvariable=self.status), sticky="")
+        # extra height goes below the Save group
+        filler = ttk.Frame(column)
+        filler.grid(column=0, row=_next_row(column))
+        column.rowconfigure(filler.grid_info()["row"], weight=1)
 
-    def _color_input(self, frame, text, var, width):
+    def _color_input(self, frame, text, var):
         """Build a labeled color entry with a palette button.
 
         Parameters
@@ -454,100 +485,15 @@ class QrCodeGeneratorApp:
             Label text.
         var : tkinter.StringVar
             Variable holding the color.
-        width : int
-            Width of the entry in characters.
 
         Returns
         -------
         list of tkinter.ttk.Widget
             The label, the entry and the button.
         """
-        stacked = width > 20  # long entries go below their label
-        label = _grid(ttk.Label(frame, text=text), 0, 0, columnspan=2)
-        entry = ttk.Entry(frame, width=width, textvariable=var)
-        button = ttk.Button(
-            frame, text="See palette", command=lambda: self._pick_color(var)
+        return _labeled_entry(
+            frame, text, var, 28, ("Palette…", lambda: self._pick_color(var))
         )
-        if stacked:
-            _grid(entry, 0, 1)
-            _grid(button, 1, 1)
-        else:
-            label.grid(columnspan=1)
-            _grid(entry, 1, 0)
-            _grid(button, 2, 0)
-        return [label, entry, button]
-
-    def _build_generate_section(self, main):
-        """Build the generate button and the status line.
-
-        Parameters
-        ----------
-        main : tkinter.ttk.Frame
-            Main frame of the window.
-        """
-        frame = ttk.Frame(main, padding=PAD)
-        frame.grid(column=2, row=9, columnspan=4)
-        self.generate_button = ttk.Button(
-            frame, text="Generate QR code (Ctrl+Enter)", command=self.generate
-        )
-        self.generate_button.grid(column=0, row=0, ipadx=10, ipady=5)
-        ttk.Label(frame, textvariable=self.status).grid(column=0, row=1)
-
-    def _build_presets_section(self, main):
-        """Build the preset dropdown and its buttons.
-
-        Parameters
-        ----------
-        main : tkinter.ttk.Frame
-            Main frame of the window.
-        """
-        frame = ttk.Frame(main, padding=PAD)
-        frame.grid(column=0, row=10, columnspan=5, sticky=tk.W)
-        ttk.Label(frame, text="Presets:").grid(column=0, row=0, sticky=tk.W)
-        self.preset_combo = ttk.Combobox(
-            frame,
-            width=25,
-            textvariable=self.preset_name,
-            postcommand=self._reload_preset_list,
-        )
-        self.preset_combo.grid(column=1, row=0, sticky=tk.W)
-        for column, text, command in (
-            (2, "Load", self.load_preset),
-            (3, "Save", self.save_preset),
-            (4, "Delete", self.delete_preset),
-            (5, "Open folder", self.open_presets_folder),
-        ):
-            ttk.Button(frame, text=text, command=command).grid(
-                column=column, row=0, sticky=tk.W, padx=(PAD, 0)
-            )
-        self._reload_preset_list()
-
-    def _build_preview(self, main):
-        """Build the preview area.
-
-        Parameters
-        ----------
-        main : tkinter.ttk.Frame
-            Main frame of the window.
-        """
-        frame = ttk.Frame(main, padding=PAD)
-        frame.grid(column=8, row=1, rowspan=10, sticky=tk.N)
-        ttk.Label(frame, text="Preview:").grid(column=0, row=0, sticky=tk.W)
-        box = ttk.Frame(
-            frame,
-            width=PREVIEW_SIZE + 4,
-            height=PREVIEW_SIZE + 4,
-            relief="sunken",
-            borderwidth=2,
-        )
-        box.grid(column=0, row=1)
-        box.grid_propagate(False)
-        box.columnconfigure(0, weight=1)
-        box.rowconfigure(0, weight=1)
-        self.preview_label = ttk.Label(
-            box, anchor=tk.CENTER, justify=tk.CENTER, wraplength=PREVIEW_SIZE
-        )
-        self.preview_label.grid(column=0, row=0)
 
     # --- widget states -----------------------------------------------
 
@@ -575,16 +521,12 @@ class QrCodeGeneratorApp:
         _set_enabled(self._png_only_widgets, not svg)
         _set_enabled(self._embed_widgets, embed)
         _set_enabled(self._mask_image_widgets, mask == "image")
+        _set_enabled(self._face_widgets, mask != "image")
         _set_enabled(self._edge_widgets, mask not in ("solid", "image"))
         _set_enabled(
             [b for v, b in self._error_correction_buttons.items() if v != "H"],
             not embed,
         )
-        self.eye_combo["values"] = [
-            text
-            for text, value in BOX_STYLE_OPTIONS
-            if not svg or value in core.SVG_DRAWERS
-        ]
 
     def _constrain(self, var, allowed, fallback):
         """Keep a variable within allowed values, remembering its value.
@@ -636,23 +578,6 @@ class QrCodeGeneratorApp:
             if str(var) in self._saved and current == forced
             else current
         )
-
-    def _show_eye_style(self):
-        """Show the eye style variable's value in its dropdown."""
-        labels = {value: text for text, value in BOX_STYLE_OPTIONS}
-        self.eye_combo.set(labels.get(self.eye_style.get(), ""))
-
-    def _on_eye_selected(self, _event):
-        """Store the eye style picked in the dropdown.
-
-        Parameters
-        ----------
-        _event : tkinter.Event
-            The selection event (unused).
-        """
-        values = {text: value for text, value in BOX_STYLE_OPTIONS}
-        self.eye_style.set(values[self.eye_combo.get()])
-        self._update_states()
 
     # --- settings ----------------------------------------------------
 
@@ -807,6 +732,26 @@ class QrCodeGeneratorApp:
 
     # --- preview -----------------------------------------------------
 
+    def _on_preview_area_resized(self, event):
+        """Fit the preview into its column, from 1 to 2 times its size.
+
+        Parameters
+        ----------
+        event : tkinter.Event
+            The ``<Configure>`` event of the right column.
+        """
+        # height of everything in the column except the preview itself
+        others = self._preview_column.winfo_reqheight() - (
+            self._preview_size + 4
+        )
+        available = min(event.width, event.height - others) - 4
+        size = max(PREVIEW_SIZE, min(MAX_PREVIEW_SIZE, available))
+        if abs(size - self._preview_size) >= 8:
+            self._preview_size = size
+            self._preview_box.configure(width=size + 4, height=size + 4)
+            self.preview_label.configure(wraplength=size)
+            self._schedule_preview()
+
     def _schedule_preview(self):
         """Redraw the preview shortly after the last change."""
         if self._preview_job is not None:
@@ -831,7 +776,7 @@ class QrCodeGeneratorApp:
             return
         self._preview_running = True
         future = self._executor.submit(
-            core.make_preview, settings, PREVIEW_SIZE
+            core.make_preview, settings, self._preview_size
         )
         self._when_done(future, self._finish_preview)
 
@@ -1090,28 +1035,119 @@ class QrCodeGeneratorApp:
         self.root.destroy()
 
 
-def _section(main, column, row, rowspan=1):
-    """Create a padded frame spanning four grid columns.
+def _column(parent, index, weight):
+    """Create one of the three main columns.
 
     Parameters
     ----------
-    main : tkinter.ttk.Frame
-        Main frame of the window.
-    column, row : int
-        Grid position.
-    rowspan : int, default 1
-        Number of grid rows to span.
+    parent : tkinter.ttk.Frame
+        Frame holding the columns.
+    index : int
+        Grid column.
+    weight : int
+        Share of extra width the column takes when the window grows.
 
     Returns
     -------
     tkinter.ttk.Frame
-        The new frame.
+        The column frame.
     """
-    frame = ttk.Frame(main, padding=PAD)
-    frame.grid(
-        column=column, row=row, columnspan=4, rowspan=rowspan, sticky=tk.W
-    )
+    frame = ttk.Frame(parent)
+    frame.grid(column=index, row=0, sticky=tk.NSEW, padx=PAD)
+    frame.columnconfigure(0, weight=1)
+    parent.columnconfigure(index, weight=weight)
     return frame
+
+
+def _next_row(frame):
+    """Return the first empty grid row of a frame.
+
+    Parameters
+    ----------
+    frame : tkinter.Widget
+        Frame using the grid geometry manager.
+
+    Returns
+    -------
+    int
+        Index of the first row below all placed widgets.
+    """
+    return frame.grid_size()[1]
+
+
+def _add(frame, widget, **options):
+    """Place a widget in the next free row of a one-column frame.
+
+    Parameters
+    ----------
+    frame : tkinter.Widget
+        Parent frame.
+    widget : tkinter.Widget
+        Widget to place.
+    **options
+        Further options of ``widget.grid``, e.g. ``sticky`` (default
+        left-aligned) or ``pady``.
+
+    Returns
+    -------
+    tkinter.Widget
+        The widget, for chaining.
+    """
+    options.setdefault("sticky", tk.W)
+    widget.grid(column=0, row=_next_row(frame), **options)
+    return widget
+
+
+def _group(column, title):
+    """Create a titled group of inputs: a bold heading and a line.
+
+    Parameters
+    ----------
+    column : tkinter.ttk.Frame
+        Column frame the group is stacked into.
+    title : str
+        Heading text.
+
+    Returns
+    -------
+    tkinter.ttk.Frame
+        Body frame for the group's inputs, see `_fit_groups_to_column`.
+    """
+    row = _next_row(column)
+    frame = ttk.Frame(column, padding=(0, PAD, 0, 0))
+    # space between groups, but not above the first one
+    frame.grid(
+        column=0, row=row, sticky=tk.NSEW, pady=(2 * PAD if row else 0, 0)
+    )
+    frame.columnconfigure(0, weight=1)  # the separator fills the column
+    bold = font.nametofont("TkDefaultFont").copy()
+    bold.configure(weight="bold")
+    heading = _add(frame, ttk.Label(frame, text=title, font=bold))
+    heading.bold_font = bold  # keep a reference, fonts are not owned
+    _add(frame, ttk.Separator(frame), sticky=tk.EW, pady=(0, PAD))
+    frame.body = _add(frame, ttk.Frame(frame))
+    frame.body.columnconfigure(0, weight=1)
+    return frame.body
+
+
+def _fit_groups_to_column(column):
+    """Make every group body as wide as the column's default width.
+
+    Long entries stretch to the body's width, so they use all of the
+    column's default width but don't grow with the window.
+
+    Parameters
+    ----------
+    column : tkinter.ttk.Frame
+        Column frame, after its widgets have been laid out once.
+    """
+    width = column.winfo_reqwidth()
+    for group in column.grid_slaves():
+        body = getattr(group, "body", None)
+        if body is not None:
+            ttk.Frame(body, width=width, height=1).grid(
+                column=0, row=_next_row(body)
+            )
 
 
 def _grid(widget, column, row, **options):
@@ -1135,8 +1171,93 @@ def _grid(widget, column, row, **options):
     return widget
 
 
-def _radio_group(frame, var, options, columns, command=None):
-    """Create radio buttons laid out in rows below row 0.
+def _labeled_entry(frame, text, var, width, button=None):
+    """Add a label with an entry (and a button) in the row below.
+
+    Parameters
+    ----------
+    frame : tkinter.ttk.Frame
+        Frame to build the widgets in.
+    text : str
+        Label text.
+    var : tkinter.StringVar
+        Variable of the entry.
+    width : int or None
+        Width of the entry in characters, or None for an entry that
+        fills the group's width (for long text like URLs and paths).
+    button : tuple of (str, callable), optional
+        Text and command of a button next to the entry.
+
+    Returns
+    -------
+    list of tkinter.ttk.Widget
+        The label, the entry and the button, if any.
+    """
+    label = _add(frame, ttk.Label(frame, text=text))
+    if width is None:
+        line = _add(frame, ttk.Frame(frame), sticky=tk.EW)
+        line.columnconfigure(0, weight=1)
+        entry = ttk.Entry(line, width=MIN_LONG_ENTRY_WIDTH, textvariable=var)
+        entry.grid(column=0, row=0, sticky=tk.EW)
+    else:
+        line = _add(frame, ttk.Frame(frame))
+        entry = _grid(ttk.Entry(line, width=width, textvariable=var), 0, 0)
+    widgets = [label, entry]
+    if button is not None:
+        text, command = button
+        widgets.append(
+            _grid(
+                ttk.Button(line, text=text, command=command),
+                1,
+                0,
+                padx=(PAD, 0),
+            )
+        )
+    return widgets
+
+
+def _spinbox_row(frame, text, var, limits):
+    """Add a label with a number spinbox next to it.
+
+    Parameters
+    ----------
+    frame : tkinter.ttk.Frame
+        Frame to build the widgets in.
+    text : str
+        Label text.
+    var : tkinter.IntVar
+        Variable of the spinbox.
+    limits : tuple of int
+        ``(lowest, highest, step)`` of the spinbox arrows. Typed
+        values are checked when the settings are read.
+
+    Returns
+    -------
+    list of tkinter.ttk.Widget
+        The label and the spinbox.
+    """
+    low, high, step = limits
+    line = _add(frame, ttk.Frame(frame), pady=1)
+    return [
+        _grid(ttk.Label(line, text=text), 0, 0),
+        _grid(
+            ttk.Spinbox(
+                line,
+                from_=low,
+                to=high,
+                increment=step,
+                width=6,
+                textvariable=var,
+            ),
+            1,
+            0,
+            padx=PAD,
+        ),
+    ]
+
+
+def _radio_group(frame, var, options, layout, command=None):
+    """Add radio buttons laid out in a grid.
 
     Parameters
     ----------
@@ -1146,8 +1267,9 @@ def _radio_group(frame, var, options, columns, command=None):
         Variable shared by the buttons.
     options : sequence of tuple of str
         ``(text, value)`` pairs, one per button.
-    columns : int
-        Number of buttons per row.
+    layout : int or sequence of tuple of int
+        Number of buttons per row, or the ``(column, row)`` of each
+        button.
     command : callable, optional
         Called when a button is clicked.
 
@@ -1156,13 +1278,19 @@ def _radio_group(frame, var, options, columns, command=None):
     dict
         Buttons keyed by their value.
     """
+    if isinstance(layout, int):
+        layout = [(i % layout, i // layout) for i in range(len(options))]
+    group = _add(frame, ttk.Frame(frame))
     buttons = {}
-    for i, (text, value) in enumerate(options):
-        button = ttk.Radiobutton(
-            frame, text=text, variable=var, value=value, command=command
+    for (text, value), (column, line) in zip(options, layout, strict=True):
+        buttons[value] = _grid(
+            ttk.Radiobutton(
+                group, text=text, variable=var, value=value, command=command
+            ),
+            column,
+            line,
+            padx=(0, 2 * PAD),
         )
-        _grid(button, i % columns, 1 + i // columns)
-        buttons[value] = button
     return buttons
 
 

@@ -72,6 +72,17 @@ signatures. Both run through pre-commit.
 - [x] **A5** Widgets are enabled and disabled by named groups instead
   of list positions. `__init__` is split into one builder method per
   section, with small helpers for repeated widget patterns.
+- [x] **A7** Three-column layout: Content/Dimensions/Colors on the
+  left; Box style, Eye style (now radio buttons), Color mask and Logo
+  in the middle; Preview and Save (format, folder, name, Generate) on
+  the right; presets in the header. Groups have bold headings with a
+  line instead of boxes. The window can be resized; only the preview
+  grows (300 to 600 px), with the Save group right below it and spare
+  space at the bottom; the window can't shrink below its default size.
+  Long entries (message, image mask path, logo path, save folder) fill
+  their column's default width but don't grow with the window. Face color is now disabled for the image color mask (it was
+  enabled but unused). A test checks every enabled/disabled connection
+  for all format × color mask × logo combinations.
 - [x] **A6** All of `gui.py` has numpydoc docstrings. The temporary
   lint exceptions for it are gone; numpydoc only skips `__init__`
   methods (documented in the class docstring) and `tests/`.
@@ -141,7 +152,7 @@ signatures. Both run through pre-commit.
 
 ## D · Quality
 
-- [x] **D5** pytest suite in `tests/` (215 tests):
+- [x] **D5** pytest suite in `tests/` (243 tests):
   - `core`: each style × mask, eye styles, colors, logo size and
     padding, SVG styles/colors/gradients/logo, background opacity,
     color parsing, settings validation, previews.

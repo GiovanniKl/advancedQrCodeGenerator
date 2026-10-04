@@ -271,16 +271,14 @@ def test_choice_made_under_svg_survives(app):
     assert app.box_style.get() == "circle"
 
 
-def test_eye_style_dropdown(app):
-    assert app.eye_combo.get() == "Square"
-    app.eye_combo.set("Gapped circle")
-    app.eye_combo.event_generate("<<ComboboxSelected>>")
-    app.root.update()
+def test_eye_style_buttons(app):
+    assert app.eye_style.get() == "square"
+    app._eye_buttons["gapcircle"].invoke()
     assert app.eye_style.get() == "gapcircle"
-    assert "Vertical bars" in app.eye_combo["values"]
     svg_mode(app)
-    assert "Vertical bars" not in app.eye_combo["values"]
-    assert app.eye_combo.get() == "Gapped circle"
+    assert app.eye_style.get() == "gapcircle"  # SVG supports it
+    assert state(app._eye_buttons["vbars"]) == "disabled"
+    assert state(app._eye_buttons["gapcircle"]) == "normal"
 
 
 def test_svg_with_logo_and_gradient(app, logo, tmp_path):
@@ -308,13 +306,53 @@ def test_invalid_logo_size_warns(app, dialogs, logo, value, message):
     assert dialogs.last_message().startswith(message)
 
 
-def test_mask_widgets_follow_color_mask(app):
-    app.color_mask.set("image")
+GRADIENTS = ("rgrad", "sgrad", "hgrad", "vgrad")
+
+
+@pytest.mark.parametrize("extension", core.FORMATS)
+@pytest.mark.parametrize("color_mask", core.COLOR_MASKS)
+@pytest.mark.parametrize("embed", [False, True])
+def test_widget_states(app, extension, color_mask, embed):
+    """Every enabled/disabled connection, for every combination."""
+    app.extension.set(extension)
+    app.color_mask.set(color_mask)
+    app.embed_image.set(embed)
     app._update_states()
+    svg = extension == ".svg"
+    # SVG replaces masks it can't do with solid fill
+    mask = (
+        "solid" if svg and color_mask not in core.SVG_GRADIENTS else color_mask
+    )
+    assert app.color_mask.get() == mask
+
+    def expect(widgets, enabled):
+        for widget in widgets:
+            assert state(widget) == ("normal" if enabled else "disabled"), (
+                widget,
+                enabled,
+            )
+
+    expect(app._mask_image_widgets, mask == "image")
+    expect(app._face_widgets, mask != "image")
+    expect(app._edge_widgets, mask in GRADIENTS)
+    expect(app._embed_widgets, embed)
+    for value, button in app._error_correction_buttons.items():
+        expect([button], value == "H" or not embed)
+    for buttons, svg_values in (
+        (app._style_buttons, core.SVG_DRAWERS),
+        (app._eye_buttons, core.SVG_DRAWERS),
+        (app._mask_buttons, core.SVG_GRADIENTS),
+    ):
+        for value, button in buttons.items():
+            expect([button], not svg or value in svg_values)
+
+
+def test_mask_buttons_update_states(app):
+    # clicking a mask button (not just setting the variable) updates
+    app._mask_buttons["image"].invoke()
     assert state(app._mask_image_widgets[1]) == "normal"
-    assert state(app._edge_widgets[1]) == "disabled"
-    app.color_mask.set("vgrad")
-    app._update_states()
+    assert state(app._face_widgets[1]) == "disabled"
+    app._mask_buttons["rgrad"].invoke()
     assert state(app._mask_image_widgets[1]) == "disabled"
     assert state(app._edge_widgets[1]) == "normal"
 
@@ -359,7 +397,20 @@ def test_browse_image(app, monkeypatch, chosen):
 def test_preview_shows_image(app):
     wait_idle(app)
     assert app._preview_photo is not None
-    assert app._preview_photo.width() == gui.PREVIEW_SIZE
+    width = app._preview_photo.width()
+    assert gui.PREVIEW_SIZE <= width <= gui.MAX_PREVIEW_SIZE
+
+
+def test_preview_grows_with_window_up_to_twice(app):
+    app.root.deiconify()  # hidden windows are never laid out
+    app.root.geometry("2400x1500")
+    app.root.update()
+    wait_idle(app)
+    assert app._preview_size == gui.MAX_PREVIEW_SIZE
+    assert app._preview_photo.width() == gui.MAX_PREVIEW_SIZE
+    app.root.geometry(f"{app.root.minsize()[0]}x{app.root.minsize()[1]}")
+    wait_idle(app)
+    assert app._preview_size < gui.MAX_PREVIEW_SIZE
 
 
 def test_preview_shows_errors_and_hints(app):
@@ -523,3 +574,53 @@ def test_checkerboard():
         white,
     ]
     assert board.getpixel((10, 10)) == grey
+
+
+# --- layout ----------------------------------------------------------
+
+
+def show(app, geometry=None):
+    app.root.deiconify()  # hidden windows are never laid out
+    if geometry:
+        app.root.geometry(geometry)
+    app.root.update()
+    wait_idle(app)
+
+
+def right_edge(widget, ancestor):
+    """X of a widget's right edge, relative to an ancestor widget."""
+    return widget.winfo_rootx() + widget.winfo_width() - ancestor.winfo_rootx()
+
+
+def long_entries(app):
+    """Last widget (entry or button) of each row whose entry fills."""
+    return [
+        app.message_entry,
+        app._mask_image_widgets[-1],
+        app._embed_widgets[2],
+        app._save_dir_widgets[-1],
+    ]
+
+
+def test_long_entries_fill_column_width(app):
+    show(app)
+    for last in long_entries(app):
+        body = last.master.master  # row frame, then the group body
+        assert abs(right_edge(last, body) - body.winfo_width()) <= 2, last
+
+
+def test_long_entries_do_not_grow_with_window(app):
+    show(app)
+    before = app._save_dir_widgets[1].winfo_width()
+    show(app, "2400x1500")
+    assert app._save_dir_widgets[1].winfo_width() == before
+
+
+def test_save_group_directly_below_preview(app):
+    show(app, "2400x1500")
+    preview_group = app._preview_box.master.master
+    save_group = app._save_dir_widgets[0].master.master
+    gap = save_group.winfo_y() - (
+        preview_group.winfo_y() + preview_group.winfo_height()
+    )
+    assert 0 <= gap <= 4 * gui.PAD
