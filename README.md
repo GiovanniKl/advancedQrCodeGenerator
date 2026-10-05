@@ -40,18 +40,18 @@ together with its dependencies.
 Windows:
 
 ```bash
-py -m pip install --user https://github.com/GiovanniKl/advancedQrCodeGenerator/archive/refs/tags/v0.1.0.zip
+py -m pip install --user https://github.com/GiovanniKl/advancedQrCodeGenerator/archive/refs/tags/v0.1.1.zip
 ```
 
 macOS / Linux:
 
 ```bash
-python3 -m pip install --user https://github.com/GiovanniKl/advancedQrCodeGenerator/archive/refs/tags/v0.1.0.zip
+python3 -m pip install --user https://github.com/GiovanniKl/advancedQrCodeGenerator/archive/refs/tags/v0.1.1.zip
 ```
 
-This installs version 0.1.0. For a newer version, replace `v0.1.0` in
+This installs version 0.1.1. For a newer version, replace `v0.1.1` in
 the link with its tag (see the [changelog](CHANGELOG.md)), or use
-`refs/heads/main.zip` instead of `refs/tags/v0.1.0.zip` for the latest
+`refs/heads/main.zip` instead of `refs/tags/v0.1.1.zip` for the latest
 development state.
 
 > [!TIP]

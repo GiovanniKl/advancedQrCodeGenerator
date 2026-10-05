@@ -4,6 +4,24 @@ All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-05
+
+### Added
+- "Import…" button next to the presets: imports old `.txt` presets
+  from any folder (the old app's folder or its `presets` folder), and
+  asks before importing files a second time.
+
+### Changed
+- When an imported preset's name is taken, it gets a number
+  (`name 2`, `name 3`, …) instead of being skipped.
+
+### Fixed
+- Old `.txt` presets saved in the Windows encoding (e.g. cp1250, as
+  the original script did) were skipped during the automatic import.
+- The automatic import skipped presets silently and then never tried
+  again; it now remembers each imported file, retries unreadable ones
+  on the next start and lists every renamed or unreadable file.
+
 ## [0.1.0] - 2026-10-04
 
 The first release as an installable package: a rewrite of the original
@@ -43,11 +61,7 @@ script with a new window layout, many new options and a test suite.
 - Generating and copying run in the background; the window no longer
   freezes.
 - Presets are JSON files in a per-user folder (e.g.
-  `%APPDATA%\aqrgen\presets`). Old `.txt` presets are imported once,
-  also when they were saved in the Windows encoding (e.g. cp1250);
-  when a name is taken, the old preset gets a number (`name 2`). The
-  "Import…" button imports old presets from any folder. The import
-  message lists every renamed or unreadable file.
+  `%APPDATA%\aqrgen\presets`); old `.txt` presets are imported once.
 - Embedding a logo selects error correction H automatically, as qrcode
   requires it.
 - SVG mode replaces options it can't do and restores them when
@@ -74,5 +88,6 @@ The original single-file script (`advancedQrCodeGenAsClass.py`): a
 tkinter window for qrcode 7.3.1 with box styles, color masks, embedded
 images, SVG output and text presets.
 
+[0.1.1]: https://github.com/GiovanniKl/advancedQrCodeGenerator/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/GiovanniKl/advancedQrCodeGenerator/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/GiovanniKl/advancedQrCodeGenerator/releases/tag/v0.0.1
